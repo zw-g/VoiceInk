@@ -1240,56 +1240,75 @@ class VoiceInputApp(rumps.App):
             self.state = State.IDLE
 
     def _type_text(self, text):
-        """[AUDIT-21] Hybrid: try AX insertion first, fall back to clipboard paste."""
+        """[AUDIT-21] 3-tier hybrid: AX → CGEvent → clipboard paste."""
         with self._type_lock:
+            # Tier 1: AX insertion (instant, no clipboard, ~8ms)
             if self._try_ax_insert(text):
+                log.info("Typed %d chars via AX API", len(text))
                 return
+            # Tier 2: CGEvent keyboard synthesis (no clipboard, universal, ~3ms/20chars)
+            if len(text) <= 200:
+                self._type_via_cgevent(text)
+                log.info("Typed %d chars via CGEvent", len(text))
+                return
+            # Tier 3: Clipboard paste (long text only)
             self._clipboard_paste(text)
+            log.info("Typed %d chars via clipboard paste", len(text))
 
     def _try_ax_insert(self, text):
-        """Insert text via Accessibility API (no clipboard). Returns True if successful."""
+        """Insert text via Accessibility API. Returns True if successful."""
         try:
             from ApplicationServices import (
-                AXUIElementCreateSystemWide,
+                AXUIElementCreateApplication,
                 AXUIElementCopyAttributeValue,
-                AXUIElementCopyParameterizedAttributeNames,
-                AXUIElementCopyParameterizedAttributeValue,
-                AXValueCreate,
-                kAXValueCFRangeType,
+                AXUIElementSetAttributeValue,
+                AXUIElementIsAttributeSettable,
             )
-            from CoreFoundation import CFRange
+            from AppKit import NSWorkspace
 
-            system = AXUIElementCreateSystemWide()
+            ws = NSWorkspace.sharedWorkspace()
+            app = ws.frontmostApplication()
+            app_elem = AXUIElementCreateApplication(app.processIdentifier())
             err, focused = AXUIElementCopyAttributeValue(
-                system, "AXFocusedUIElement", None
+                app_elem, "AXFocusedUIElement", None
             )
             if err != 0 or focused is None:
                 return False
-
-            # Check if the focused element supports AXReplaceRangeWithText
-            err, params = AXUIElementCopyParameterizedAttributeNames(focused, None)
-            if err != 0 or not params or "AXReplaceRangeWithText" not in list(params):
-                return False
-
-            # Get current selection range (cursor position)
-            err, sel_range = AXUIElementCopyAttributeValue(
-                focused, "AXSelectedTextRange", None
+            err, settable = AXUIElementIsAttributeSettable(
+                focused, "AXSelectedText", None
             )
-            if err != 0 or sel_range is None:
+            if err != 0 or not settable:
                 return False
+            err = AXUIElementSetAttributeValue(focused, "AXSelectedText", text)
+            return err == 0
+        except Exception:
+            return False
 
-            # Insert text at the selection using AXReplaceRangeWithText
-            # sel_range is already an AXValue with the current selection
-            err = AXUIElementCopyParameterizedAttributeValue(
-                focused, "AXReplaceRangeWithText", (sel_range, text), None
-            )
-            if err == 0:
-                log.info("Text inserted via AX API (no clipboard)")
-                return True
-            return False
-        except Exception as e:
-            log.debug("AX insertion failed: %s", e)
-            return False
+    def _type_via_cgevent(self, text, delay=0.003):
+        """Type text character-by-character via CGEvent. No clipboard needed."""
+        from Quartz import (
+            CGEventCreateKeyboardEvent,
+            CGEventKeyboardSetUnicodeString,
+            CGEventPost,
+            CGEventSetFlags,
+            kCGSessionEventTap,
+        )
+
+        MAX_CHUNK = 20
+        i = 0
+        while i < len(text):
+            chunk = text[i : i + MAX_CHUNK]
+            # Don't split surrogate pairs (emoji, rare CJK)
+            if chunk and ord(chunk[-1]) >= 0xD800 and ord(chunk[-1]) <= 0xDBFF:
+                chunk = text[i : i + MAX_CHUNK - 1]
+            i += len(chunk)
+            for key_down in (True, False):
+                ev = CGEventCreateKeyboardEvent(None, 0, key_down)
+                CGEventKeyboardSetUnicodeString(ev, len(chunk), chunk)
+                CGEventSetFlags(ev, 0)
+                CGEventPost(kCGSessionEventTap, ev)
+            if delay > 0:
+                time.sleep(delay)
 
     _MAX_CLIPBOARD_BYTES = 10 * 1024 * 1024
 
