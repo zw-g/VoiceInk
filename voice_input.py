@@ -1185,23 +1185,35 @@ class VoiceInputApp(rumps.App):
             log.warning("NER extraction failed: %s", e)
         return []
 
+    _MAX_CONTEXT_TERMS = 80  # Prevent ASR hallucination from too many terms
+
     def _build_context(self):
         terms = {}
-        # Use a snapshot of dictionary for thread safety
         dictionary = self.dictionary
+        # Dictionary terms always included (highest priority)
         for w in dictionary.get("vocabulary", []):
             terms[w.lower()] = w
 
-        # [AUDIT-1] Don't block on OCR — use whatever is available (was 3s, now 200ms)
         self._ocr_done.wait(timeout=0.2)
 
         if self.screen_text:
             for w in self._extract_entities(self.screen_text):
+                if len(terms) >= self._MAX_CONTEXT_TERMS:
+                    break
                 key = w.lower()
+                # Extra garbage filter: reject obvious OCR noise
+                if len(key) > 25:
+                    continue  # Too long = garbled
+                if sum(1 for c in key if c.isdigit()) > len(key) * 0.3:
+                    continue  # Too many digits = OCR corruption
                 if key not in terms:
                     terms[key] = w
 
-        return " ".join(sorted(terms.values())) if terms else ""
+        context = " ".join(sorted(terms.values())) if terms else ""
+        if len(context) > 2000:
+            # Hard cap: truncate to prevent model overload
+            context = " ".join(context.split()[:self._MAX_CONTEXT_TERMS])
+        return context
 
     # ── Transcription ─────────────────────────────────────────
 
