@@ -1193,24 +1193,27 @@ class VoiceInputApp(rumps.App):
             log.warning("NER extraction failed: %s", e)
         return []
 
-    # Dynamic context: context tokens should be < audio tokens to prevent hallucination.
-    # Audio tokens ≈ duration * 125, context tokens ≈ terms * 1.55
-    # So max_terms ≈ duration * 80. Capped at 800 for very long recordings.
-    _MIN_CONTEXT_TERMS = 50   # minimum even for very short recordings
-    _MAX_CONTEXT_TERMS = 800  # absolute maximum for very long recordings
+    # Context limit: hallucination is caused by garbage terms, not quantity.
+    # 274 clean terms at 53x audio ratio worked perfectly.
+    # 669 garbage terms at 28x ratio caused hallucination.
+    # So: filter quality aggressively, allow generous quantity.
+    _MAX_CONTEXT_TERMS = 500  # generous cap; quality filtering is the real gate
 
     def _build_context(self, audio_duration=5.0):
-        """Build context string. Limit scales dynamically with audio duration.
+        """Build context with ranked terms. Quality filtering prevents hallucination.
 
-        Rule: context tokens should be < audio tokens to prevent hallucination.
-        Audio tokens ≈ duration × 125. Context tokens ≈ terms × 1.55.
-        So max_terms ≈ duration × 80.
+        Ranking priority:
+          1. Dictionary terms (user-curated, always included)
+          2. NER named entities from frontmost window (highest relevance)
+          3. NER entities from other screens (lower relevance)
+
+        Quality filters:
+          - Reject terms > 25 chars (garbled OCR)
+          - Reject terms with > 30% digits (OCR corruption)
         """
-        # Dynamic limit based on recording duration
-        dynamic_limit = int(audio_duration * 80)
-        max_terms = max(self._MIN_CONTEXT_TERMS, min(dynamic_limit, self._MAX_CONTEXT_TERMS))
-
         terms = {}
+
+        # Priority 1: Dictionary vocabulary (always included, highest rank)
         dictionary = self.dictionary
         for w in dictionary.get("vocabulary", []):
             terms[w.lower()] = w
@@ -1218,18 +1221,18 @@ class VoiceInputApp(rumps.App):
         self._ocr_done.wait(timeout=0.2)
 
         if self.screen_text:
-            for w in self._extract_entities(self.screen_text):
-                if len(terms) >= max_terms:
+            entities = self._extract_entities(self.screen_text)
+            for w in entities:
+                if len(terms) >= self._MAX_CONTEXT_TERMS:
                     break
                 key = w.lower()
-                if len(key) > 25:
-                    continue
-                if sum(1 for c in key if c.isdigit()) > len(key) * 0.3:
+                # Quality gate — reject garbage
+                if len(key) > 25 or sum(1 for c in key if c.isdigit()) > len(key) * 0.3:
                     continue
                 if key not in terms:
                     terms[key] = w
 
-        log.info("Context: %d/%d terms (%.1fs audio → limit %d)", len(terms), max_terms, audio_duration, max_terms)
+        log.info("Context: %d terms (%.1fs audio)", len(terms), audio_duration)
         return " ".join(sorted(terms.values())) if terms else ""
 
     # ── Transcription ─────────────────────────────────────────
@@ -1250,6 +1253,8 @@ class VoiceInputApp(rumps.App):
             with Timer("Transcription"):
                 log.info("Transcribing %.1fs", duration)
                 context = self._build_context(audio_duration=duration)
+                if context:
+                    log.info("Context terms: %s", context[:200])
                 # [P3-5] Pass numpy array directly — no temp file needed
                 result = self.session.transcribe(
                     (audio, SAMPLE_RATE), context=context
