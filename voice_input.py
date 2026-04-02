@@ -604,13 +604,18 @@ class VoiceInputApp(rumps.App):
             self._rebuild_history_menu()
             self._history_dirty = False
 
-        # [BUG-2] State check INSIDE lock to prevent TOCTOU race
+        # Auto-stop check — NO lock on main thread (lock would deadlock with pynput)
+        if self.state in (State.RECORDING_HOLD, State.RECORDING_TOGGLE):
+            if self._rec_start_time and (time.time() - self._rec_start_time) > MAX_RECORDING_SECS:
+                log.warning("Max recording duration reached (%ds)", MAX_RECORDING_SECS)
+                notify("VoiceInk", f"Max {MAX_RECORDING_SECS // 60}min reached, transcribing…")
+                # Stop from a separate thread to avoid main-thread lock contention
+                threading.Thread(target=self._timer_auto_stop, daemon=True).start()
+
+    def _timer_auto_stop(self):
         with self.lock:
             if self.state in (State.RECORDING_HOLD, State.RECORDING_TOGGLE):
-                if self._rec_start_time and (time.time() - self._rec_start_time) > MAX_RECORDING_SECS:
-                    log.warning("Max recording duration reached (%ds)", MAX_RECORDING_SECS)
-                    notify("VoiceInk", f"Max {MAX_RECORDING_SECS // 60}min reached, transcribing…")
-                    self._stop_rec_and_transcribe()
+                self._stop_rec_and_transcribe()
 
         # Hide Dock icon (one-shot)
         if not self._dock_hidden:
