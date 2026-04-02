@@ -461,6 +461,7 @@ class VoiceInputApp(rumps.App):
         self._vad_stop_requested = False
         self._keyboard_listener = None
         self._ner_lock = threading.Lock()
+        self._last_key_event_time = 0.0
         threading.Thread(target=self._setup, daemon=True).start()
 
     def _ensure_image_view(self):
@@ -631,10 +632,12 @@ class VoiceInputApp(rumps.App):
                 notify("VoiceInk", f"Max {MAX_RECORDING_SECS // 60}min reached, transcribing…")
                 threading.Thread(target=self._timer_auto_stop, daemon=True).start()
 
-        # Watchdog: detect stuck RECORDING_HOLD (keyboard listener may have died)
+        # Watchdog: detect stuck RECORDING_HOLD (keyboard listener may have died).
+        # Push-to-talk recordings rarely exceed 30s. If we're stuck longer,
+        # the CGEvent tap was likely disabled by macOS.
         if self.state == State.RECORDING_HOLD and self._rec_start_time:
             hold_time = time.time() - self._rec_start_time
-            if hold_time > 120:
+            if hold_time > 30:
                 log.warning("Watchdog: RECORDING_HOLD stuck for %.0fs, forcing cancel", hold_time)
                 threading.Thread(target=self._watchdog_cancel, daemon=True).start()
 
@@ -666,14 +669,12 @@ class VoiceInputApp(rumps.App):
                 self._stop_rec_and_transcribe()
 
     def _watchdog_cancel(self):
-        """Force-cancel a stuck recording and restart the keyboard listener."""
+        """Force-stop a stuck recording, transcribe it, and restart the listener."""
         with self.lock:
             if self.state == State.RECORDING_HOLD:
-                self._cancel_rec()
-                self.state = State.IDLE
-                self._pending_status_title = "Ready"
-                log.warning("Watchdog: recording force-cancelled")
-                notify("VoiceInk", "Recording cancelled — restarting keyboard listener")
+                log.warning("Watchdog: force-stopping stuck recording, transcribing audio")
+                notify("VoiceInk", "Key release missed — transcribing anyway")
+                self._stop_rec_and_transcribe()
         # Force listener restart so the auto-restart loop in _setup kicks in
         listener = self._keyboard_listener
         if listener:
@@ -1527,6 +1528,7 @@ class VoiceInputApp(rumps.App):
 
     # [P1-2] All state transitions wrapped in try/except
     def _on_press(self, key):
+        self._last_key_event_time = time.monotonic()
         # [P4-6] Escape cancels recording
         if key == keyboard.Key.esc:
             with self.lock:
@@ -1564,6 +1566,7 @@ class VoiceInputApp(rumps.App):
                 self.state = State.IDLE
 
     def _on_release(self, key):
+        self._last_key_event_time = time.monotonic()
         if key != self._hotkey:
             return
         with self.lock:
