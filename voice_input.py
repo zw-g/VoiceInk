@@ -115,9 +115,9 @@ class Timer:
 class SimpleVAD:
     """RMS energy-based voice activity detection for real-time auto-stop."""
 
-    def __init__(self, threshold=0.015, silence_limit=50, min_speech=3):
+    def __init__(self, threshold=0.015, silence_limit=94, min_speech=3):
         self.threshold = threshold
-        self.silence_limit = silence_limit  # ~1.6s at 32ms/frame
+        self.silence_limit = silence_limit  # ~3s at 32ms/frame
         self.min_speech = min_speech
         self.silence_count = 0
         self.speech_count = 0
@@ -164,8 +164,8 @@ def load_settings():
     if SETTINGS_PATH.exists():
         try:
             settings = json.loads(SETTINGS_PATH.read_text())
-        except Exception:
-            pass
+        except Exception as e:
+            log.warning("Failed to parse settings.json (using defaults): %s", e)
     # [P5-3] Apply config overrides
     MODEL = settings.get("model", _DEFAULTS["model"])
     SAMPLE_RATE = settings.get("sample_rate", _DEFAULTS["sample_rate"])
@@ -243,7 +243,7 @@ def capture_screens():
 
         # 1. Capture frontmost window (most relevant context)
         frontmost = NSWorkspace.sharedWorkspace().frontmostApplication()
-        pid = frontmost.processIdentifier()
+        pid = frontmost.processIdentifier() if frontmost else -1
         windows = Quartz.CGWindowListCopyWindowInfo(
             Quartz.kCGWindowListOptionOnScreenOnly
             | Quartz.kCGWindowListExcludeDesktopElements,
@@ -458,6 +458,9 @@ class VoiceInputApp(rumps.App):
 
         self._dock_hidden = False
         self._dict_mtime = 0.0
+        self._vad_stop_requested = False
+        self._keyboard_listener = None
+        self._ner_lock = threading.Lock()
         threading.Thread(target=self._setup, daemon=True).start()
 
     def _ensure_image_view(self):
@@ -597,7 +600,7 @@ class VoiceInputApp(rumps.App):
 
     @rumps.timer(2)
     def _periodic(self, timer):
-        """Main-thread timer: icon state + Dock hiding + mic + dict."""
+        """Main-thread timer: icon state, Dock hiding, mic hot-plug, dict reload, watchdog."""
         # ── Apply icon effect based on state (unified state machine) ──
         visual = self.state.visual
         self._apply_effect(visual)
@@ -606,6 +609,12 @@ class VoiceInputApp(rumps.App):
         if getattr(self, "_history_dirty", False):
             self._rebuild_history_menu()
             self._history_dirty = False
+
+        # Apply pending status title updates from background threads
+        pending = getattr(self, "_pending_status_title", None)
+        if pending is not None:
+            self.status_item.title = pending
+            self._pending_status_title = None
 
         # Hide Dock icon (one-shot, must run on main thread)
         if not self._dock_hidden:
@@ -620,19 +629,16 @@ class VoiceInputApp(rumps.App):
             if self._rec_start_time and (time.time() - self._rec_start_time) > MAX_RECORDING_SECS:
                 log.warning("Max recording duration reached (%ds)", MAX_RECORDING_SECS)
                 notify("VoiceInk", f"Max {MAX_RECORDING_SECS // 60}min reached, transcribing…")
-                # Stop from a separate thread to avoid main-thread lock contention
                 threading.Thread(target=self._timer_auto_stop, daemon=True).start()
 
-    def _timer_auto_stop(self):
-        with self.lock:
-            if self.state in (State.RECORDING_HOLD, State.RECORDING_TOGGLE):
-                self._stop_rec_and_transcribe()
+        # Watchdog: detect stuck RECORDING_HOLD (keyboard listener may have died)
+        if self.state == State.RECORDING_HOLD and self._rec_start_time:
+            hold_time = time.time() - self._rec_start_time
+            if hold_time > 120:
+                log.warning("Watchdog: RECORDING_HOLD stuck for %.0fs, forcing cancel", hold_time)
+                threading.Thread(target=self._watchdog_cancel, daemon=True).start()
 
-        # [P1-4] Mic hot-plug: check device count change as a lightweight signal.
-        # We no longer call sd._terminate()/_initialize() which was destroying
-        # PortAudio every 2 seconds and causing freezes.
-        # Instead, just re-query devices (PortAudio returns cached list but
-        # the count/names change when macOS notifies PortAudio of device changes).
+        # Mic hot-plug: check device list change
         try:
             current_devs = self._get_input_devices()
             if current_devs != self._last_device_list:
@@ -653,6 +659,28 @@ class VoiceInputApp(rumps.App):
             self.dictionary = load_dictionary(DICT_PATH)
             n = len(self.dictionary.get("vocabulary", []))
             log.info("Dictionary auto-reloaded (%d entries)", n)
+
+    def _timer_auto_stop(self):
+        with self.lock:
+            if self.state in (State.RECORDING_HOLD, State.RECORDING_TOGGLE):
+                self._stop_rec_and_transcribe()
+
+    def _watchdog_cancel(self):
+        """Force-cancel a stuck recording and restart the keyboard listener."""
+        with self.lock:
+            if self.state == State.RECORDING_HOLD:
+                self._cancel_rec()
+                self.state = State.IDLE
+                self._pending_status_title = "Ready"
+                log.warning("Watchdog: recording force-cancelled")
+                notify("VoiceInk", "Recording cancelled — restarting keyboard listener")
+        # Force listener restart so the auto-restart loop in _setup kicks in
+        listener = self._keyboard_listener
+        if listener:
+            try:
+                listener.stop()
+            except Exception:
+                pass
 
     # ── Setup ─────────────────────────────────────────────────
 
@@ -691,7 +719,9 @@ class VoiceInputApp(rumps.App):
                 with keyboard.Listener(
                     on_press=self._on_press, on_release=self._on_release
                 ) as listener:
+                    self._keyboard_listener = listener
                     listener.join()
+                self._keyboard_listener = None
                 log.warning("Keyboard listener exited")
             except Exception as e:
                 log.error("Keyboard listener died: %s", e)
@@ -756,6 +786,21 @@ class VoiceInputApp(rumps.App):
                 return False
             log.info("git pull: %s", result.stdout.strip())
 
+            # Update Python dependencies
+            venv_pip = self._INSTALL_DIR / ".venv-py2app" / "bin" / "pip"
+            req_file = self._INSTALL_DIR / "requirements.txt"
+            if venv_pip.exists() and req_file.exists():
+                r = subprocess.run(
+                    [str(venv_pip), "install", "-q", "-r", str(req_file)],
+                    capture_output=True,
+                    text=True,
+                    timeout=120,
+                )
+                if r.returncode != 0:
+                    log.warning("pip install failed: %s", r.stderr[:200] if r.stderr else "")
+                else:
+                    log.info("Python dependencies updated")
+
             # Recompile NER tools
             for src in ["ner_tool.swift", "ner_daemon.swift"]:
                 name = src.replace(".swift", "")
@@ -765,10 +810,10 @@ class VoiceInputApp(rumps.App):
                     capture_output=True,
                     timeout=60,
                 )
-                # [AUDIT-8] Check swiftc return code
                 if r.returncode != 0:
                     log.error("swiftc failed for %s: %s", src, r.stderr[:200] if r.stderr else "")
-                    notify("VoiceInk", f"Update warning: {src} compilation failed")
+                    notify("VoiceInk", f"Update failed: {src} compilation error")
+                    return False
             log.info("NER tools recompiled")
 
             # [BUG-10] Clean up before restart
@@ -787,6 +832,10 @@ class VoiceInputApp(rumps.App):
 
             log.info("Restarting VoiceInk...")
             notify("VoiceInk", "Updated! Restarting...")
+
+            # Flush logs before execv (which replaces process without cleanup)
+            for handler in log.handlers:
+                handler.flush()
             time.sleep(1)
 
             import sys
@@ -816,7 +865,6 @@ class VoiceInputApp(rumps.App):
             # [AUDIT-9] Don't auto-restart — notify user and let them choose
             log.info("Update available — notifying user")
             notify("VoiceInk", "Update available! Click 'Check for Updates' to apply.")
-            self.status_item.title = "Update available"
 
     def _toggle_auto_update(self, sender):
         self._auto_update = not self._auto_update
@@ -1027,6 +1075,7 @@ class VoiceInputApp(rumps.App):
         self.audio_frames = []
         self._rec_start_time = time.time()
         self._vad.reset()
+        self._vad_stop_requested = False
 
         # [P1-2] Crash protection for mic errors
         try:
@@ -1040,7 +1089,8 @@ class VoiceInputApp(rumps.App):
             self.stream.start()
         except Exception as e:
             log.error("Mic open failed: %s", e)
-            notify("VoiceInk", f"Microphone error: {e}")
+            notify("VoiceInk", f"Microphone error: {e}\nCheck System Settings > Privacy > Microphone")
+            play_sound("Basso")
             self.state = State.IDLE
             return
 
@@ -1049,7 +1099,9 @@ class VoiceInputApp(rumps.App):
         log.info("Recording started")
 
         if self.screen_ctx_on:
+            global _ocr_cache_time
             self.screen_text = ""  # [BUG-5] Clear stale context before new OCR
+            _ocr_cache_time = 0.0  # Invalidate OCR cache for fresh capture
             self._ocr_done.clear()
             threading.Thread(target=self._capture_screen, daemon=True).start()
 
@@ -1093,10 +1145,11 @@ class VoiceInputApp(rumps.App):
             log.warning("Audio callback status: %s", status)
         self.audio_frames.append(indata.copy())
 
-        # [AUDIT-20] VAD auto-stop in toggle mode
+        # [AUDIT-20] VAD auto-stop in toggle mode (guarded to prevent thread storm)
         if self.state == State.RECORDING_TOGGLE:
             _, should_stop = self._vad.process_frame(indata[:, 0])
-            if should_stop:
+            if should_stop and not self._vad_stop_requested:
+                self._vad_stop_requested = True
                 log.info("VAD: silence detected, auto-stopping toggle recording")
                 threading.Thread(target=self._vad_auto_stop, daemon=True).start()
 
@@ -1104,7 +1157,7 @@ class VoiceInputApp(rumps.App):
         """Auto-stop toggle recording when VAD detects sustained silence."""
         with self.lock:
             if self.state == State.RECORDING_TOGGLE:
-                self.status_item.title = "Ready"
+                self._pending_status_title = "Ready"
                 self._stop_rec_and_transcribe()
 
     def _capture_screen(self):
@@ -1124,6 +1177,8 @@ class VoiceInputApp(rumps.App):
 
     def _start_ner_daemon(self):
         """Start the NER daemon subprocess. Called once during setup."""
+        import select
+
         try:
             self._ner_proc = subprocess.Popen(
                 [self._NER_DAEMON_PATH],
@@ -1133,7 +1188,13 @@ class VoiceInputApp(rumps.App):
                 text=True,
                 bufsize=1,
             )
-            # Wait for READY signal
+            # Wait for READY signal with timeout
+            ready_fds, _, _ = select.select([self._ner_proc.stdout], [], [], 10.0)
+            if not ready_fds:
+                log.warning("NER daemon startup timed out (10s)")
+                self._ner_proc.terminate()
+                self._ner_proc = None
+                return False
             ready = self._ner_proc.stdout.readline().strip()
             if ready == "READY":
                 log.info("NER daemon started (PID %d)", self._ner_proc.pid)
@@ -1141,39 +1202,63 @@ class VoiceInputApp(rumps.App):
             log.warning("NER daemon unexpected output: %s", ready)
         except Exception as e:
             log.warning("NER daemon start failed: %s", e)
+        if self._ner_proc:
+            try:
+                self._ner_proc.terminate()
+            except Exception:
+                pass
         self._ner_proc = None
         return False
 
     _ner_restart_count = 0
     _MAX_NER_RESTARTS = 3
+    _ner_last_success = 0.0
 
     def _extract_entities(self, text):
         """Extract entities via NER daemon (fast) or fallback to subprocess."""
-        # [AUDIT-18] Try to restart dead daemon (up to 3 times)
+        import select
+
+        # Reset restart counter after 5 minutes of successful operation
+        if self._ner_last_success and (time.monotonic() - self._ner_last_success) > 300:
+            if self._ner_restart_count > 0:
+                log.info("NER restart counter reset (stable for 5+ min)")
+                self._ner_restart_count = 0
+
+        # Try to restart dead daemon (up to 3 times per stability window)
         if hasattr(self, "_ner_proc") and (self._ner_proc is None or self._ner_proc.poll() is not None):
             if self._ner_restart_count < self._MAX_NER_RESTARTS:
                 log.info("NER daemon died, restarting (attempt %d)", self._ner_restart_count + 1)
                 if self._start_ner_daemon():
                     self._ner_restart_count += 1
 
-        # Try daemon first
+        # Try daemon first (with lock to prevent interleaved requests)
         if hasattr(self, "_ner_proc") and self._ner_proc and self._ner_proc.poll() is None:
-            try:
-                with Timer("NER extraction (daemon)"):
-                    # Send text as single line (replace newlines with spaces)
-                    self._ner_proc.stdin.write(text.replace("\n", " ") + "\n")
-                    self._ner_proc.stdin.flush()
-                    # Read until empty line
-                    results = []
-                    while True:
-                        line = self._ner_proc.stdout.readline().strip()
-                        if not line:
-                            break
-                        results.append(line)
-                    return results
-            except Exception as e:
-                log.warning("NER daemon call failed: %s", e)
-                self._ner_proc = None
+            with self._ner_lock:
+                try:
+                    with Timer("NER extraction (daemon)"):
+                        self._ner_proc.stdin.write(text.replace("\n", " ") + "\n")
+                        self._ner_proc.stdin.flush()
+                        results = []
+                        while True:
+                            # Timeout on readline to prevent indefinite hang
+                            ready_fds, _, _ = select.select(
+                                [self._ner_proc.stdout], [], [], 5.0
+                            )
+                            if not ready_fds:
+                                log.warning("NER daemon readline timed out")
+                                self._ner_proc.terminate()
+                                self._ner_proc = None
+                                break
+                            line = self._ner_proc.stdout.readline().strip()
+                            if not line:
+                                break
+                            results.append(line)
+                        if results:
+                            self._ner_last_success = time.monotonic()
+                        return results
+                except Exception as e:
+                    log.warning("NER daemon call failed: %s", e)
+                    self._ner_proc = None
 
         # Fallback to one-shot subprocess
         try:
@@ -1218,7 +1303,7 @@ class VoiceInputApp(rumps.App):
         for w in dictionary.get("vocabulary", []):
             terms[w.lower()] = w
 
-        self._ocr_done.wait(timeout=0.2)
+        self._ocr_done.wait(timeout=2.0)
 
         if self.screen_text:
             entities = self._extract_entities(self.screen_text)
@@ -1274,6 +1359,7 @@ class VoiceInputApp(rumps.App):
             play_sound("Basso")  # [P4-2] error feedback
         finally:
             self.state = State.IDLE
+            self._pending_status_title = "Ready"
 
     def _type_text(self, text):
         """[AUDIT-21] 3-tier hybrid: AX → CGEvent → clipboard paste."""
@@ -1337,10 +1423,11 @@ class VoiceInputApp(rumps.App):
             )
             len_after = len(val_after) if err_after == 0 and val_after else -1
 
-            if len_before >= 0 and len_after >= 0 and len_after <= len_before:
-                # Value didn't grow — insertion was silently ignored (e.g., Chrome web content)
-                log.debug("AX write silently ignored (len %d → %d), falling back", len_before, len_after)
-                return False
+            if err_before == 0 and err_after == 0 and val_before is not None and val_after is not None:
+                if val_after == val_before:
+                    # Value unchanged — insertion was silently ignored (e.g., Chrome web content)
+                    log.debug("AX write silently ignored, falling back")
+                    return False
 
             return True
         except Exception:
@@ -1402,7 +1489,7 @@ class VoiceInputApp(rumps.App):
         self.kb.tap("v")
         self.kb.release(keyboard.Key.cmd)
 
-        time.sleep(0.3)
+        time.sleep(0.5)
         if old_data:
             pb.clearContents()
             for t, d in old_data.items():
@@ -1445,6 +1532,8 @@ class VoiceInputApp(rumps.App):
             try:
                 if self.state == State.IDLE:
                     if self.session is None:
+                        play_sound("Basso")
+                        notify("VoiceInk", "Model not loaded — check log for errors")
                         return
                     self.key_down_time = time.time()
                     self.state = State.RECORDING_HOLD

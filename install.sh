@@ -54,7 +54,7 @@ for f in voice_input.py ner_daemon.swift ner_tool.swift start.sh stop.sh require
         cp "$SCRIPT_DIR/$f" "$INSTALL_DIR/"
     fi
 done
-chmod +x "$INSTALL_DIR/start.sh"
+chmod +x "$INSTALL_DIR/start.sh" "$INSTALL_DIR/stop.sh"
 
 # Create default dictionary if not exists
 if [[ ! -f "$INSTALL_DIR/dictionary.json" ]]; then
@@ -91,6 +91,15 @@ fi
 # [AUDIT-4+6] Set up LaunchAgent with PATH, KeepAlive, WorkingDirectory
 echo "Setting up LaunchAgent..."
 PLIST="$HOME/Library/LaunchAgents/com.local.voiceinput.plist"
+
+# Preserve user's RunAtLoad preference if plist already exists
+RUN_AT_LOAD="false"
+if [[ -f "$PLIST" ]]; then
+    if /usr/libexec/PlistBuddy -c "Print :RunAtLoad" "$PLIST" 2>/dev/null | grep -q "true"; then
+        RUN_AT_LOAD="true"
+    fi
+fi
+
 cat > "$PLIST" << PLISTEOF
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -104,7 +113,7 @@ cat > "$PLIST" << PLISTEOF
         <string>$INSTALL_DIR/voice_input.py</string>
     </array>
     <key>RunAtLoad</key>
-    <false/>
+    <$RUN_AT_LOAD/>
     <key>KeepAlive</key>
     <dict>
         <key>SuccessfulExit</key>
