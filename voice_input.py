@@ -355,6 +355,10 @@ class VoiceInputApp(rumps.App):
         self.history_menu = rumps.MenuItem("Recent Transcriptions")
         self._rebuild_history_menu()
 
+        self._auto_update = self._settings.get("auto_update", True)
+        auto_update_item = rumps.MenuItem("Auto-Update", callback=self._toggle_auto_update)
+        auto_update_item.state = self._auto_update
+
         self.menu = [
             self.status_item,
             None,
@@ -363,6 +367,8 @@ class VoiceInputApp(rumps.App):
             self.ctx_item,
             rumps.MenuItem("Edit Dictionary", callback=self._edit_dict),
             None,
+            rumps.MenuItem("Check for Updates", callback=self._manual_update),
+            auto_update_item,
             rumps.MenuItem("Launch at Login", callback=self._toggle_login),
             rumps.MenuItem("Quit VoiceInk", callback=self._quit),
         ]
@@ -572,6 +578,11 @@ class VoiceInputApp(rumps.App):
 
         self._start_ner_daemon()
         self._check_permissions()
+
+        # [P5-5] Auto-update check (non-blocking)
+        if self._auto_update:
+            threading.Thread(target=self._auto_update_check, daemon=True).start()
+
         self.state = State.IDLE
         self.status_item.title = "Ready"
         notify("VoiceInk", "Ready — use right Option key")
@@ -591,6 +602,110 @@ class VoiceInputApp(rumps.App):
             self.status_item.title = "Listener error"
             time.sleep(3)
             self.status_item.title = "Ready"
+
+    # ── Update mechanism [P5-5] ─────────────────────────────
+
+    _REPO = "zw-g/VoiceInk"
+    _INSTALL_DIR = CONFIG_DIR
+
+    def _check_for_update(self):
+        """Check GitHub for new commits. Returns True if update available."""
+        try:
+            import urllib.request
+
+            url = f"https://api.github.com/repos/{self._REPO}/commits/main"
+            req = urllib.request.Request(url, headers={"Accept": "application/vnd.github.v3+json"})
+            with urllib.request.urlopen(req, timeout=5) as resp:
+                data = json.loads(resp.read())
+            remote_sha = data["sha"]
+
+            # Get local SHA
+            result = subprocess.run(
+                ["git", "rev-parse", "HEAD"],
+                cwd=str(self._INSTALL_DIR),
+                capture_output=True,
+                text=True,
+            )
+            local_sha = result.stdout.strip() if result.returncode == 0 else ""
+
+            if remote_sha != local_sha and local_sha:
+                log.info("Update available: %s -> %s", local_sha[:8], remote_sha[:8])
+                return True
+            log.info("VoiceInk is up to date (%s)", local_sha[:8])
+            return False
+        except Exception as e:
+            log.warning("Update check failed: %s", e)
+            return False
+
+    def _perform_update(self):
+        """Pull latest code, recompile NER tools, and restart."""
+        try:
+            log.info("Updating VoiceInk...")
+            notify("VoiceInk", "Updating... will restart shortly")
+
+            # Git pull
+            result = subprocess.run(
+                ["git", "pull", "origin", "main"],
+                cwd=str(self._INSTALL_DIR),
+                capture_output=True,
+                text=True,
+                timeout=30,
+            )
+            if result.returncode != 0:
+                log.error("git pull failed: %s", result.stderr)
+                notify("VoiceInk", f"Update failed: {result.stderr[:100]}")
+                return False
+            log.info("git pull: %s", result.stdout.strip())
+
+            # Recompile NER tools
+            for src in ["ner_tool.swift", "ner_daemon.swift"]:
+                name = src.replace(".swift", "")
+                subprocess.run(
+                    ["swiftc", "-O", "-o", str(self._INSTALL_DIR / name),
+                     str(self._INSTALL_DIR / src)],
+                    capture_output=True,
+                    timeout=60,
+                )
+            log.info("NER tools recompiled")
+
+            # Restart process
+            log.info("Restarting VoiceInk...")
+            notify("VoiceInk", "Updated! Restarting...")
+            time.sleep(1)
+
+            import sys
+            python = sys.executable
+            script = str(self._INSTALL_DIR / "voice_input.py")
+            os.execv(python, [python, script])
+
+        except Exception as e:
+            log.error("Update failed: %s", e)
+            notify("VoiceInk", f"Update failed: {e}")
+            return False
+
+    def _manual_update(self, _):
+        """Menu: Check for Updates clicked."""
+        threading.Thread(target=self._do_manual_update, daemon=True).start()
+
+    def _do_manual_update(self):
+        if self._check_for_update():
+            self._perform_update()
+        else:
+            notify("VoiceInk", "Already up to date")
+
+    def _auto_update_check(self):
+        """Background auto-update: check and apply if available."""
+        time.sleep(5)  # let the app finish starting first
+        if self._check_for_update():
+            log.info("Auto-updating...")
+            self._perform_update()
+
+    def _toggle_auto_update(self, sender):
+        self._auto_update = not self._auto_update
+        sender.state = self._auto_update
+        self._settings["auto_update"] = self._auto_update
+        self._save_settings()
+        log.info("Auto-update: %s", "enabled" if self._auto_update else "disabled")
 
     # ── Permission checks [P4-1] ─────────────────────────────
 
@@ -714,6 +829,7 @@ class VoiceInputApp(rumps.App):
             "preferred_mic": self.preferred_mic_name,
             "screen_context": self.screen_ctx_on,
             "hotkey": self._settings.get("hotkey", DEFAULT_HOTKEY),
+            "auto_update": self._auto_update,
             "history": self._history[:self._MAX_HISTORY],
         })
 
