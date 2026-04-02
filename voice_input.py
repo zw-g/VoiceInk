@@ -607,6 +607,14 @@ class VoiceInputApp(rumps.App):
             self._rebuild_history_menu()
             self._history_dirty = False
 
+        # Hide Dock icon (one-shot, must run on main thread)
+        if not self._dock_hidden:
+            from AppKit import NSApplication
+
+            NSApplication.sharedApplication().setActivationPolicy_(1)
+            self._dock_hidden = True
+            log.info("Dock icon hidden")
+
         # Auto-stop check — NO lock on main thread (lock would deadlock with pynput)
         if self.state in (State.RECORDING_HOLD, State.RECORDING_TOGGLE):
             if self._rec_start_time and (time.time() - self._rec_start_time) > MAX_RECORDING_SECS:
@@ -619,14 +627,6 @@ class VoiceInputApp(rumps.App):
         with self.lock:
             if self.state in (State.RECORDING_HOLD, State.RECORDING_TOGGLE):
                 self._stop_rec_and_transcribe()
-
-        # Hide Dock icon (one-shot)
-        if not self._dock_hidden:
-            from AppKit import NSApplication
-
-            NSApplication.sharedApplication().setActivationPolicy_(1)
-            self._dock_hidden = True
-            log.info("Dock icon hidden")
 
         # [P1-4] Mic hot-plug: check device count change as a lightweight signal.
         # We no longer call sd._terminate()/_initialize() which was destroying
