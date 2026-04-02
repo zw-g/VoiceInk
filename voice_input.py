@@ -1271,21 +1271,11 @@ class VoiceInputApp(rumps.App):
             self._clipboard_paste(text)
             log.info("Typed %d chars via clipboard paste", len(text))
 
-    # Browsers report AXSelectedText as settable but silently ignore writes
-    _AX_SKIP_BUNDLES = frozenset({
-        "com.google.Chrome",
-        "com.google.Chrome.canary",
-        "com.brave.Browser",
-        "com.microsoft.edgemac",
-        "org.chromium.Chromium",
-        "company.thebrowser.Browser",  # Arc
-        "com.operasoftware.Opera",
-        "org.mozilla.firefox",
-        "com.apple.Safari",  # Safari web fields also unreliable with AX
-    })
-
     def _try_ax_insert(self, text):
-        """Insert text via Accessibility API. Returns True if successful."""
+        """Insert text via Accessibility API. Returns True if ACTUALLY successful.
+        Some apps (Chrome web content) return success but silently ignore the write.
+        We verify by checking the value changed.
+        """
         try:
             from ApplicationServices import (
                 AXUIElementCreateApplication,
@@ -1297,25 +1287,42 @@ class VoiceInputApp(rumps.App):
 
             ws = NSWorkspace.sharedWorkspace()
             app = ws.frontmostApplication()
-
-            # Skip browsers — AX writes silently fail in web content
-            bundle_id = app.bundleIdentifier() or ""
-            if bundle_id in self._AX_SKIP_BUNDLES:
-                return False
-
             app_elem = AXUIElementCreateApplication(app.processIdentifier())
             err, focused = AXUIElementCopyAttributeValue(
                 app_elem, "AXFocusedUIElement", None
             )
             if err != 0 or focused is None:
                 return False
+
             err, settable = AXUIElementIsAttributeSettable(
                 focused, "AXSelectedText", None
             )
             if err != 0 or not settable:
                 return False
+
+            # Read current value length before insertion
+            err_before, val_before = AXUIElementCopyAttributeValue(
+                focused, "AXValue", None
+            )
+            len_before = len(val_before) if err_before == 0 and val_before else -1
+
+            # Attempt insertion
             err = AXUIElementSetAttributeValue(focused, "AXSelectedText", text)
-            return err == 0
+            if err != 0:
+                return False
+
+            # Verify: read value after insertion — if unchanged, AX was silently ignored
+            err_after, val_after = AXUIElementCopyAttributeValue(
+                focused, "AXValue", None
+            )
+            len_after = len(val_after) if err_after == 0 and val_after else -1
+
+            if len_before >= 0 and len_after >= 0 and len_after <= len_before:
+                # Value didn't grow — insertion was silently ignored (e.g., Chrome web content)
+                log.debug("AX write silently ignored (len %d → %d), falling back", len_before, len_after)
+                return False
+
+            return True
         except Exception:
             return False
 
