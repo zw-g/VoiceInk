@@ -207,10 +207,14 @@ def play_sound(name):
         )
 
 
+_ICON_PATH = str(CONFIG_DIR / "icon_light.png")
+
+
 def notify(title, body):
-    """Send notification via rumps (shows VoiceInk icon) with osascript fallback."""
+    """Send notification with VoiceInk icon."""
     try:
-        rumps.notification(title, "", body, sound=False)
+        icon = _ICON_PATH if os.path.exists(_ICON_PATH) else None
+        rumps.notification(title, "", body, sound=False, icon=icon)
     except Exception:
         # Fallback for notifications before rumps app is running
         safe_title = title.replace("\\", "\\\\").replace('"', '\\"')

@@ -1,8 +1,19 @@
-# VoiceInk
+<p align="center">
+  <img src="assets/icon_light.png" alt="VoiceInk" width="128" height="128">
+</p>
 
-macOS menu bar push-to-talk voice input powered by **Qwen3-ASR** on Apple Silicon.
+<h1 align="center">VoiceInk</h1>
 
-Press right Option to talk, release to type. That's it.
+<p align="center">
+  macOS menu bar push-to-talk voice input powered by <b>Qwen3-ASR</b> on Apple Silicon.<br>
+  Press right Option to talk, release to type. That's it.
+</p>
+
+<p align="center">
+  <img src="assets/icon_light.png" alt="Light" width="64" height="64">
+  <img src="assets/icon_dark.png" alt="Dark" width="64" height="64">
+  <img src="assets/icon_glow.png" alt="Glow" width="64" height="64">
+</p>
 
 ## Features
 
