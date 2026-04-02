@@ -1185,7 +1185,7 @@ class VoiceInputApp(rumps.App):
             log.warning("NER extraction failed: %s", e)
         return []
 
-    _MAX_CONTEXT_TERMS = 80  # Prevent ASR hallucination from too many terms
+    _MAX_CONTEXT_TERMS = 250  # 274 worked fine, 669 hallucinated. Safe max.
 
     def _build_context(self):
         terms = {}
