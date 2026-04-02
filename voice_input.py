@@ -77,6 +77,7 @@ class State(enum.Enum):
     WAITING_DOUBLE_CLICK = "waiting_double_click"
     RECORDING_TOGGLE = "recording_toggle"
     PROCESSING = "processing"
+    ERROR = "error"  # [AUDIT-13] Visual error state
 
     @property
     def visual(self):
@@ -87,6 +88,8 @@ class State(enum.Enum):
             return "processing"
         if self == State.IDLE:
             return "idle"
+        if self == State.ERROR:
+            return "error"
         return "loading"
 
 
@@ -187,21 +190,45 @@ def notify(title, body):
 # ── Screen OCR ────────────────────────────────────────────────────
 
 
-def capture_all_screens():
-    """Capture all visible content across all connected displays."""
+def capture_screens():
+    """[AUDIT-19] Capture frontmost window first, then other screens.
+    Returns list of CGImages — frontmost window is first (highest priority context).
+    """
     if not _HAS_VISION:
         return []
     try:
-        from AppKit import NSScreen
+        from AppKit import NSScreen, NSWorkspace
 
         images = []
+
+        # 1. Capture frontmost window (most relevant context)
+        frontmost = NSWorkspace.sharedWorkspace().frontmostApplication()
+        pid = frontmost.processIdentifier()
+        windows = Quartz.CGWindowListCopyWindowInfo(
+            Quartz.kCGWindowListOptionOnScreenOnly
+            | Quartz.kCGWindowListExcludeDesktopElements,
+            Quartz.kCGNullWindowID,
+        )
+        for w in windows:
+            if w.get("kCGWindowOwnerPID") == pid and w.get("kCGWindowLayer", 999) == 0:
+                wid = w.get("kCGWindowNumber")
+                if wid:
+                    img = Quartz.CGWindowListCreateImage(
+                        Quartz.CGRectNull,
+                        Quartz.kCGWindowListOptionIncludingWindow,
+                        wid,
+                        Quartz.kCGWindowImageBoundsIgnoreFraming,
+                    )
+                    if img:
+                        images.append(img)
+                break
+
+        # 2. Capture remaining screens for additional context
         for screen in NSScreen.screens():
             frame = screen.frame()
             rect = Quartz.CGRectMake(
-                frame.origin.x,
-                frame.origin.y,
-                frame.size.width,
-                frame.size.height,
+                frame.origin.x, frame.origin.y,
+                frame.size.width, frame.size.height,
             )
             img = Quartz.CGWindowListCreateImage(
                 rect,
@@ -211,6 +238,7 @@ def capture_all_screens():
             )
             if img:
                 images.append(img)
+
         return images
     except Exception as e:
         log.warning("Screen capture failed: %s", e)
@@ -257,7 +285,7 @@ def get_screen_text():
         return _ocr_cache_text
 
     # [P3-3] Parallel OCR across screens
-    images = capture_all_screens()
+    images = capture_screens()
     if not images:
         return ""
 
@@ -287,6 +315,14 @@ class VoiceInputApp(rumps.App):
         if icon_img:
             icon_img.setTemplate_(True)
         self._icon_image = icon_img
+
+        # [AUDIT-13] Error icon
+        error_img = NSImage.imageWithSystemSymbolName_accessibilityDescription_(
+            "exclamationmark.triangle", None
+        )
+        if error_img:
+            error_img.setTemplate_(True)
+        self._icon_error = error_img
 
         super().__init__(name="VoiceInk", title=None, quit_button=None)
         self._icon_nsimage = icon_img
@@ -453,6 +489,12 @@ class VoiceInputApp(rumps.App):
             self._image_view.addSymbolEffect_options_animated_(
                 self._effect_processing, self._effect_opts_bounce, True
             )
+        elif effect_name == "error":
+            # [AUDIT-13] Switch to error icon
+            self._image_view.setImage_(self._icon_error)
+        if effect_name != "error" and self._active_effect == "error":
+            # Restore normal icon when leaving error state
+            self._image_view.setImage_(self._icon_image)
         self._active_effect = effect_name
 
     # ── Microphone management ────────────────────────────────
@@ -579,7 +621,7 @@ class VoiceInputApp(rumps.App):
             notify("VoiceInk", f"Model failed: {e}")
             # [P1-3] UI update via main thread is best-effort here
             self.status_item.title = "Model failed"
-            self.state = State.IDLE  # Stop spinning icon
+            self.state = State.ERROR  # [AUDIT-13] Show error icon
             return
 
         self._start_ner_daemon()
@@ -606,7 +648,9 @@ class VoiceInputApp(rumps.App):
                 log.error("Keyboard listener died: %s", e)
             notify("VoiceInk", "Keyboard listener lost — restarting in 3s")
             self.status_item.title = "Listener error"
+            self.state = State.ERROR  # [AUDIT-13]
             time.sleep(3)
+            self.state = State.IDLE
             self.status_item.title = "Ready"
 
     # ── Update mechanism [P5-5] ─────────────────────────────
@@ -1036,8 +1080,18 @@ class VoiceInputApp(rumps.App):
         self._ner_proc = None
         return False
 
+    _ner_restart_count = 0
+    _MAX_NER_RESTARTS = 3
+
     def _extract_entities(self, text):
         """Extract entities via NER daemon (fast) or fallback to subprocess."""
+        # [AUDIT-18] Try to restart dead daemon (up to 3 times)
+        if hasattr(self, "_ner_proc") and (self._ner_proc is None or self._ner_proc.poll() is not None):
+            if self._ner_restart_count < self._MAX_NER_RESTARTS:
+                log.info("NER daemon died, restarting (attempt %d)", self._ner_restart_count + 1)
+                if self._start_ner_daemon():
+                    self._ner_restart_count += 1
+
         # Try daemon first
         if hasattr(self, "_ner_proc") and self._ner_proc and self._ner_proc.poll() is None:
             try:
