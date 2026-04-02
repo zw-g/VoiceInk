@@ -1193,12 +1193,25 @@ class VoiceInputApp(rumps.App):
             log.warning("NER extraction failed: %s", e)
         return []
 
-    _MAX_CONTEXT_TERMS = 500  # 274 clean terms worked, 669 garbage hallucinated. With garbage filter active, 500 clean terms is safe.
+    # Dynamic context: context tokens should be < audio tokens to prevent hallucination.
+    # Audio tokens ≈ duration * 125, context tokens ≈ terms * 1.55
+    # So max_terms ≈ duration * 80. Capped at 800 for very long recordings.
+    _MIN_CONTEXT_TERMS = 50   # minimum even for very short recordings
+    _MAX_CONTEXT_TERMS = 800  # absolute maximum for very long recordings
 
-    def _build_context(self):
+    def _build_context(self, audio_duration=5.0):
+        """Build context string. Limit scales dynamically with audio duration.
+
+        Rule: context tokens should be < audio tokens to prevent hallucination.
+        Audio tokens ≈ duration × 125. Context tokens ≈ terms × 1.55.
+        So max_terms ≈ duration × 80.
+        """
+        # Dynamic limit based on recording duration
+        dynamic_limit = int(audio_duration * 80)
+        max_terms = max(self._MIN_CONTEXT_TERMS, min(dynamic_limit, self._MAX_CONTEXT_TERMS))
+
         terms = {}
         dictionary = self.dictionary
-        # Dictionary terms always included (highest priority)
         for w in dictionary.get("vocabulary", []):
             terms[w.lower()] = w
 
@@ -1206,22 +1219,18 @@ class VoiceInputApp(rumps.App):
 
         if self.screen_text:
             for w in self._extract_entities(self.screen_text):
-                if len(terms) >= self._MAX_CONTEXT_TERMS:
+                if len(terms) >= max_terms:
                     break
                 key = w.lower()
-                # Extra garbage filter: reject obvious OCR noise
                 if len(key) > 25:
-                    continue  # Too long = garbled
+                    continue
                 if sum(1 for c in key if c.isdigit()) > len(key) * 0.3:
-                    continue  # Too many digits = OCR corruption
+                    continue
                 if key not in terms:
                     terms[key] = w
 
-        context = " ".join(sorted(terms.values())) if terms else ""
-        if len(context) > 2000:
-            # Hard cap: truncate to prevent model overload
-            context = " ".join(context.split()[:self._MAX_CONTEXT_TERMS])
-        return context
+        log.info("Context: %d/%d terms (%.1fs audio → limit %d)", len(terms), max_terms, audio_duration, max_terms)
+        return " ".join(sorted(terms.values())) if terms else ""
 
     # ── Transcription ─────────────────────────────────────────
 
@@ -1240,9 +1249,7 @@ class VoiceInputApp(rumps.App):
         try:
             with Timer("Transcription"):
                 log.info("Transcribing %.1fs", duration)
-                context = self._build_context()
-                if context:
-                    log.info("Context: %s", context)
+                context = self._build_context(audio_duration=duration)
                 # [P3-5] Pass numpy array directly — no temp file needed
                 result = self.session.transcribe(
                     (audio, SAMPLE_RATE), context=context
