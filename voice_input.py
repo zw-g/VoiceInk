@@ -1193,7 +1193,7 @@ class VoiceInputApp(rumps.App):
             log.warning("NER extraction failed: %s", e)
         return []
 
-    _MAX_CONTEXT_TERMS = 250  # 274 worked fine, 669 hallucinated. Safe max.
+    _MAX_CONTEXT_TERMS = 500  # 274 clean terms worked, 669 garbage hallucinated. With garbage filter active, 500 clean terms is safe.
 
     def _build_context(self):
         terms = {}
