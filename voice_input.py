@@ -1177,8 +1177,6 @@ class VoiceInputApp(rumps.App):
 
     def _start_ner_daemon(self):
         """Start the NER daemon subprocess. Called once during setup."""
-        import select
-
         try:
             self._ner_proc = subprocess.Popen(
                 [self._NER_DAEMON_PATH],
@@ -1188,18 +1186,26 @@ class VoiceInputApp(rumps.App):
                 text=True,
                 bufsize=1,
             )
-            # Wait for READY signal with timeout
-            ready_fds, _, _ = select.select([self._ner_proc.stdout], [], [], 10.0)
-            if not ready_fds:
-                log.warning("NER daemon startup timed out (10s)")
+            # Wait for READY signal with timeout (use thread because
+            # select.select doesn't work with Python's buffered text IO)
+            ready_result = [None]
+
+            def _read_ready():
+                try:
+                    ready_result[0] = self._ner_proc.stdout.readline().strip()
+                except Exception:
+                    pass
+
+            t = threading.Thread(target=_read_ready, daemon=True)
+            t.start()
+            t.join(timeout=10.0)
+            if t.is_alive() or ready_result[0] != "READY":
+                log.warning("NER daemon startup failed (timeout or bad output: %s)", ready_result[0])
                 self._ner_proc.terminate()
                 self._ner_proc = None
                 return False
-            ready = self._ner_proc.stdout.readline().strip()
-            if ready == "READY":
-                log.info("NER daemon started (PID %d)", self._ner_proc.pid)
-                return True
-            log.warning("NER daemon unexpected output: %s", ready)
+            log.info("NER daemon started (PID %d)", self._ner_proc.pid)
+            return True
         except Exception as e:
             log.warning("NER daemon start failed: %s", e)
         if self._ner_proc:
@@ -1216,8 +1222,6 @@ class VoiceInputApp(rumps.App):
 
     def _extract_entities(self, text):
         """Extract entities via NER daemon (fast) or fallback to subprocess."""
-        import select
-
         # Reset restart counter after 5 minutes of successful operation
         if self._ner_last_success and (time.monotonic() - self._ner_last_success) > 300:
             if self._ner_restart_count > 0:
@@ -1238,21 +1242,29 @@ class VoiceInputApp(rumps.App):
                     with Timer("NER extraction (daemon)"):
                         self._ner_proc.stdin.write(text.replace("\n", " ") + "\n")
                         self._ner_proc.stdin.flush()
+                        # Use thread for readline timeout (select doesn't work
+                        # with Python's buffered text IO)
                         results = []
-                        while True:
-                            # Timeout on readline to prevent indefinite hang
-                            ready_fds, _, _ = select.select(
-                                [self._ner_proc.stdout], [], [], 5.0
-                            )
-                            if not ready_fds:
-                                log.warning("NER daemon readline timed out")
-                                self._ner_proc.terminate()
-                                self._ner_proc = None
-                                break
-                            line = self._ner_proc.stdout.readline().strip()
-                            if not line:
-                                break
-                            results.append(line)
+                        read_done = threading.Event()
+
+                        def _read_loop():
+                            try:
+                                while True:
+                                    line = self._ner_proc.stdout.readline().strip()
+                                    if not line:
+                                        break
+                                    results.append(line)
+                            except Exception:
+                                pass
+                            read_done.set()
+
+                        reader = threading.Thread(target=_read_loop, daemon=True)
+                        reader.start()
+                        if not read_done.wait(timeout=5.0):
+                            log.warning("NER daemon readline timed out")
+                            self._ner_proc.terminate()
+                            self._ner_proc = None
+                            return []
                         if results:
                             self._ner_last_success = time.monotonic()
                         return results
