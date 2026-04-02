@@ -208,19 +208,19 @@ def play_sound(name):
 
 
 def notify(title, body):
-    # [BUG-11] Escape quotes to prevent osascript injection
-    safe_title = title.replace("\\", "\\\\").replace('"', '\\"')
-    safe_body = body.replace("\\", "\\\\").replace('"', '\\"')
-    subprocess.Popen(
-        [
-            "osascript",
-            "-e",
-            f'display notification "{safe_body}" with title "{safe_title}"',
-        ],
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
-        start_new_session=True,
-    )
+    """Send notification via rumps (shows VoiceInk icon) with osascript fallback."""
+    try:
+        rumps.notification(title, "", body, sound=False)
+    except Exception:
+        # Fallback for notifications before rumps app is running
+        safe_title = title.replace("\\", "\\\\").replace('"', '\\"')
+        safe_body = body.replace("\\", "\\\\").replace('"', '\\"')
+        subprocess.Popen(
+            ["osascript", "-e", f'display notification "{safe_body}" with title "{safe_title}"'],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            start_new_session=True,
+        )
 
 
 # ── Screen OCR ────────────────────────────────────────────────────
