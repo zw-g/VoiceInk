@@ -109,6 +109,42 @@ class Timer:
         log.info("%s completed in %.2fs", self.label, elapsed)
 
 
+# ── VAD (Voice Activity Detection) [AUDIT-20] ────────────────────
+
+
+class SimpleVAD:
+    """RMS energy-based voice activity detection for real-time auto-stop."""
+
+    def __init__(self, threshold=0.015, silence_limit=50, min_speech=3):
+        self.threshold = threshold
+        self.silence_limit = silence_limit  # ~1.6s at 32ms/frame
+        self.min_speech = min_speech
+        self.silence_count = 0
+        self.speech_count = 0
+        self.is_speaking = False
+
+    def process_frame(self, float32_frame):
+        """Process a single frame. Returns (is_speech, should_auto_stop)."""
+        rms = np.sqrt(np.mean(float32_frame ** 2))
+
+        if rms > self.threshold:
+            self.speech_count += 1
+            self.silence_count = 0
+            if self.speech_count >= self.min_speech:
+                self.is_speaking = True
+        else:
+            self.silence_count += 1
+            self.speech_count = 0
+
+        should_stop = self.is_speaking and self.silence_count >= self.silence_limit
+        return rms > self.threshold, should_stop
+
+    def reset(self):
+        self.silence_count = 0
+        self.speech_count = 0
+        self.is_speaking = False
+
+
 # ── Utilities ─────────────────────────────────────────────────────
 
 DEFAULT_DICT = {
@@ -342,6 +378,7 @@ class VoiceInputApp(rumps.App):
         self.session = None
         self.kb = keyboard.Controller()
         self._rec_start_time = 0.0
+        self._vad = SimpleVAD()  # [AUDIT-20] Real-time VAD for auto-stop
         self._MAX_HISTORY = 30
         self._history = self._settings.get("history", [])[:self._MAX_HISTORY]
 
@@ -977,6 +1014,7 @@ class VoiceInputApp(rumps.App):
         self._resolve_mic()
         self.audio_frames = []
         self._rec_start_time = time.time()
+        self._vad.reset()
 
         # [P1-2] Crash protection for mic errors
         try:
@@ -1042,6 +1080,20 @@ class VoiceInputApp(rumps.App):
         if status:
             log.warning("Audio callback status: %s", status)
         self.audio_frames.append(indata.copy())
+
+        # [AUDIT-20] VAD auto-stop in toggle mode
+        if self.state == State.RECORDING_TOGGLE:
+            _, should_stop = self._vad.process_frame(indata[:, 0])
+            if should_stop:
+                log.info("VAD: silence detected, auto-stopping toggle recording")
+                threading.Thread(target=self._vad_auto_stop, daemon=True).start()
+
+    def _vad_auto_stop(self):
+        """Auto-stop toggle recording when VAD detects sustained silence."""
+        with self.lock:
+            if self.state == State.RECORDING_TOGGLE:
+                self.status_item.title = "Ready"
+                self._stop_rec_and_transcribe()
 
     def _capture_screen(self):
         try:
@@ -1187,45 +1239,93 @@ class VoiceInputApp(rumps.App):
         finally:
             self.state = State.IDLE
 
-    _MAX_CLIPBOARD_BYTES = 10 * 1024 * 1024  # [BUG-4] 10MB cap for clipboard save
-
     def _type_text(self, text):
+        """[AUDIT-21] Hybrid: try AX insertion first, fall back to clipboard paste."""
         with self._type_lock:
-            from AppKit import NSPasteboard, NSPasteboardTypeString
+            if self._try_ax_insert(text):
+                return
+            self._clipboard_paste(text)
 
-            pb = NSPasteboard.generalPasteboard()
+    def _try_ax_insert(self, text):
+        """Insert text via Accessibility API (no clipboard). Returns True if successful."""
+        try:
+            from ApplicationServices import (
+                AXUIElementCreateSystemWide,
+                AXUIElementCopyAttributeValue,
+                AXUIElementCopyParameterizedAttributeNames,
+                AXUIElementCopyParameterizedAttributeValue,
+                AXValueCreate,
+                kAXValueCFRangeType,
+            )
+            from CoreFoundation import CFRange
 
-            # [BUG-4] Save clipboard with size cap to prevent memory spike
-            old_data = {}
-            total_bytes = 0
-            old_types = pb.types()
-            if old_types:
-                for t in old_types:
-                    d = pb.dataForType_(t)
-                    if d:
-                        total_bytes += d.length()
-                        if total_bytes > self._MAX_CLIPBOARD_BYTES:
-                            log.warning("Clipboard too large (%d bytes), skipping restore", total_bytes)
-                            old_data = {}
-                            break
-                        old_data[str(t)] = d
+            system = AXUIElementCreateSystemWide()
+            err, focused = AXUIElementCopyAttributeValue(
+                system, "AXFocusedUIElement", None
+            )
+            if err != 0 or focused is None:
+                return False
 
-            # Set transcribed text
+            # Check if the focused element supports AXReplaceRangeWithText
+            err, params = AXUIElementCopyParameterizedAttributeNames(focused, None)
+            if err != 0 or not params or "AXReplaceRangeWithText" not in list(params):
+                return False
+
+            # Get current selection range (cursor position)
+            err, sel_range = AXUIElementCopyAttributeValue(
+                focused, "AXSelectedTextRange", None
+            )
+            if err != 0 or sel_range is None:
+                return False
+
+            # Insert text at the selection using AXReplaceRangeWithText
+            # sel_range is already an AXValue with the current selection
+            err = AXUIElementCopyParameterizedAttributeValue(
+                focused, "AXReplaceRangeWithText", (sel_range, text), None
+            )
+            if err == 0:
+                log.info("Text inserted via AX API (no clipboard)")
+                return True
+            return False
+        except Exception as e:
+            log.debug("AX insertion failed: %s", e)
+            return False
+
+    _MAX_CLIPBOARD_BYTES = 10 * 1024 * 1024
+
+    def _clipboard_paste(self, text):
+        """Fallback: insert text via clipboard save/paste/restore."""
+        from AppKit import NSPasteboard, NSPasteboardTypeString
+
+        pb = NSPasteboard.generalPasteboard()
+
+        old_data = {}
+        total_bytes = 0
+        old_types = pb.types()
+        if old_types:
+            for t in old_types:
+                d = pb.dataForType_(t)
+                if d:
+                    total_bytes += d.length()
+                    if total_bytes > self._MAX_CLIPBOARD_BYTES:
+                        log.warning("Clipboard too large (%d bytes), skipping restore", total_bytes)
+                        old_data = {}
+                        break
+                    old_data[str(t)] = d
+
+        pb.clearContents()
+        pb.setString_forType_(text, NSPasteboardTypeString)
+
+        time.sleep(0.02)
+        self.kb.press(keyboard.Key.cmd)
+        self.kb.tap("v")
+        self.kb.release(keyboard.Key.cmd)
+
+        time.sleep(0.3)
+        if old_data:
             pb.clearContents()
-            pb.setString_forType_(text, NSPasteboardTypeString)
-
-            # Paste
-            time.sleep(0.02)
-            self.kb.press(keyboard.Key.cmd)
-            self.kb.tap("v")
-            self.kb.release(keyboard.Key.cmd)
-
-            # [BUG-1] Wait longer for slow apps (Electron, Java) to read clipboard
-            time.sleep(0.3)
-            if old_data:
-                pb.clearContents()
-                for t, d in old_data.items():
-                    pb.setData_forType_(d, t)
+            for t, d in old_data.items():
+                pb.setData_forType_(d, t)
 
     # ── Key events (state machine) ────────────────────────────
 
