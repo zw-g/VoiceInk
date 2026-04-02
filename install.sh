@@ -49,7 +49,7 @@ mkdir -p "$INSTALL_DIR"
 
 # Copy source files
 echo "Copying files..."
-for f in voice_input.py ner_daemon.swift ner_tool.swift start.sh requirements.txt; do
+for f in voice_input.py ner_daemon.swift ner_tool.swift start.sh stop.sh requirements.txt VoiceInk.icns; do
     if [[ -f "$SCRIPT_DIR/$f" ]]; then
         cp "$SCRIPT_DIR/$f" "$INSTALL_DIR/"
     fi
