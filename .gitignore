@@ -1,0 +1,14 @@
+__pycache__/
+*.pyc
+.venv*/
+build/
+dist/
+*.egg-info/
+voice_input.log*
+settings.json
+ner_tool
+ner_daemon
+VoiceInk.app/
+VoiceInput.app/
+launcher.c
+setup.py

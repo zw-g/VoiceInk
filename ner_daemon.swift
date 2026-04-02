@@ -1,0 +1,97 @@
+import NaturalLanguage
+import Foundation
+
+// [P3-1] Long-running NER daemon — reads lines from stdin, writes results to stdout
+// Protocol: one JSON line per request, one JSON line per response
+// Eliminates ~50-80ms subprocess spawn overhead per transcription
+
+let tagger = NLTagger(tagSchemes: [.nameType, .lexicalClass])
+let recognizer = NLLanguageRecognizer()
+
+func isCleanTerm(_ word: String) -> Bool {
+    if word.count < 2 { return false }
+    if word.contains("\u{FFFD}") || word.unicodeScalars.contains(where: { $0.value < 32 }) {
+        return false
+    }
+    if !word.contains(where: { $0.isLetter }) { return false }
+
+    let nonAscii = word.unicodeScalars.filter { !$0.isASCII }
+    let asciiLetters = word.unicodeScalars.filter { $0.isASCII && $0.value >= 65 && $0.value <= 122 }
+    if nonAscii.count > 0 && asciiLetters.count > 0 {
+        return false
+    }
+
+    let digits = word.filter { $0.isNumber }
+    let letters = word.filter { $0.isLetter }
+    if digits.count > 0 && letters.count > 0 {
+        let ratio = Double(digits.count) / Double(word.count)
+        if ratio > 0.2 && ratio < 0.8 { return false }
+    }
+    if word.count > 8 && word == word.uppercased() { return false }
+    return true
+}
+
+func extractEntities(_ input: String) -> [String] {
+    tagger.string = input
+    let fullRange = input.startIndex..<input.endIndex
+
+    recognizer.reset()
+    recognizer.processString(input)
+    if let lang = recognizer.dominantLanguage {
+        tagger.setLanguage(lang, range: fullRange)
+    }
+
+    var seen = Set<String>()
+    var results: [String] = []
+
+    tagger.enumerateTags(in: fullRange, unit: .word, scheme: .nameType,
+        options: [.omitPunctuation, .omitWhitespace, .joinNames]) { tag, range in
+        if let tag = tag, tag != .otherWord {
+            let word = String(input[range])
+            let key = word.lowercased()
+            if !seen.contains(key) && isCleanTerm(word) {
+                seen.insert(key)
+                results.append(word)
+            }
+        }
+        return true
+    }
+
+    tagger.enumerateTags(in: fullRange, unit: .word, scheme: .lexicalClass,
+        options: [.omitPunctuation, .omitWhitespace]) { tag, range in
+        if let tag = tag, tag == .noun {
+            let word = String(input[range])
+            let isCapitalized = word.first?.isUppercase == true
+            let hasMixedCase = word.contains(where: { $0.isUppercase }) &&
+                              word.contains(where: { $0.isLowercase }) &&
+                              word.dropFirst().contains(where: { $0.isUppercase })
+            let hasDigits = word.contains(where: { $0.isNumber })
+            if (isCapitalized || hasMixedCase || hasDigits) && word.count > 1 {
+                let key = word.lowercased()
+                if !seen.contains(key) && isCleanTerm(word) {
+                    seen.insert(key)
+                    results.append(word)
+                }
+            }
+        }
+        return true
+    }
+
+    return results
+}
+
+// Daemon loop: read lines from stdin, process, write results
+// Signal readiness
+fputs("READY\n", stdout)
+fflush(stdout)
+
+while let line = readLine(strippingNewline: true) {
+    if line.isEmpty { continue }
+    let entities = extractEntities(line)
+    // Output: newline-separated terms, terminated by an empty line
+    for entity in entities {
+        print(entity)
+    }
+    print("")  // empty line = end of results for this request
+    fflush(stdout)
+}
