@@ -666,12 +666,16 @@ class VoiceInputApp(rumps.App):
             # Recompile NER tools
             for src in ["ner_tool.swift", "ner_daemon.swift"]:
                 name = src.replace(".swift", "")
-                subprocess.run(
+                r = subprocess.run(
                     ["swiftc", "-O", "-o", str(self._INSTALL_DIR / name),
                      str(self._INSTALL_DIR / src)],
                     capture_output=True,
                     timeout=60,
                 )
+                # [AUDIT-8] Check swiftc return code
+                if r.returncode != 0:
+                    log.error("swiftc failed for %s: %s", src, r.stderr[:200] if r.stderr else "")
+                    notify("VoiceInk", f"Update warning: {src} compilation failed")
             log.info("NER tools recompiled")
 
             # [BUG-10] Clean up before restart
@@ -713,11 +717,13 @@ class VoiceInputApp(rumps.App):
             notify("VoiceInk", "Already up to date")
 
     def _auto_update_check(self):
-        """Background auto-update: check and apply if available."""
-        time.sleep(5)  # let the app finish starting first
+        """Background auto-update: check and notify (don't restart mid-use)."""
+        time.sleep(10)
         if self._check_for_update():
-            log.info("Auto-updating...")
-            self._perform_update()
+            # [AUDIT-9] Don't auto-restart — notify user and let them choose
+            log.info("Update available — notifying user")
+            notify("VoiceInk", "Update available! Click 'Check for Updates' to apply.")
+            self.status_item.title = "Update available"
 
     def _toggle_auto_update(self, sender):
         self._auto_update = not self._auto_update
@@ -1076,8 +1082,8 @@ class VoiceInputApp(rumps.App):
         for w in dictionary.get("vocabulary", []):
             terms[w.lower()] = w
 
-        # [P2-2] Wait for OCR to finish (with timeout)
-        self._ocr_done.wait(timeout=3.0)
+        # [AUDIT-1] Don't block on OCR — use whatever is available (was 3s, now 200ms)
+        self._ocr_done.wait(timeout=0.2)
 
         if self.screen_text:
             for w in self._extract_entities(self.screen_text):

@@ -4,15 +4,36 @@ set -euo pipefail
 echo "=== VoiceInk Installer ==="
 echo ""
 
-# Check requirements
+# [AUDIT-7] Check all prerequisites with clear error messages
 if [[ "$(uname -m)" != "arm64" ]]; then
     echo "Error: VoiceInk requires Apple Silicon (M1/M2/M3/M4)"
     exit 1
 fi
 
-if ! command -v /opt/homebrew/bin/python3.13 &>/dev/null; then
+# Check macOS version (requires 14+)
+MACOS_VER=$(sw_vers -productVersion | cut -d. -f1)
+if [[ "$MACOS_VER" -lt 14 ]]; then
+    echo "Error: VoiceInk requires macOS 14 (Sonoma) or newer. You have $(sw_vers -productVersion)."
+    exit 1
+fi
+
+if ! command -v brew &>/dev/null; then
+    echo "Error: Homebrew is required. Install from https://brew.sh"
+    echo "  /bin/bash -c \"\$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)\""
+    exit 1
+fi
+
+if ! command -v swiftc &>/dev/null; then
+    echo "Error: Xcode Command Line Tools required for Swift compilation."
+    echo "  Run: xcode-select --install"
+    exit 1
+fi
+
+PYTHON313="$(brew --prefix python@3.13 2>/dev/null)/bin/python3.13"
+if [[ ! -x "$PYTHON313" ]]; then
     echo "Python 3.13 not found. Installing via Homebrew..."
     brew install python@3.13
+    PYTHON313="$(brew --prefix python@3.13)/bin/python3.13"
 fi
 
 if ! command -v ffmpeg &>/dev/null; then
@@ -28,10 +49,11 @@ mkdir -p "$INSTALL_DIR"
 
 # Copy source files
 echo "Copying files..."
-cp "$SCRIPT_DIR/voice_input.py" "$INSTALL_DIR/"
-cp "$SCRIPT_DIR/ner_daemon.swift" "$INSTALL_DIR/"
-cp "$SCRIPT_DIR/ner_tool.swift" "$INSTALL_DIR/"
-cp "$SCRIPT_DIR/start.sh" "$INSTALL_DIR/"
+for f in voice_input.py ner_daemon.swift ner_tool.swift start.sh requirements.txt; do
+    if [[ -f "$SCRIPT_DIR/$f" ]]; then
+        cp "$SCRIPT_DIR/$f" "$INSTALL_DIR/"
+    fi
+done
 chmod +x "$INSTALL_DIR/start.sh"
 
 # Create default dictionary if not exists
@@ -43,19 +65,30 @@ fi
 echo "Setting up Python virtual environment..."
 VENV="$INSTALL_DIR/.venv-py2app"
 if [[ ! -d "$VENV" ]]; then
-    /opt/homebrew/bin/python3.13 -m venv "$VENV"
+    "$PYTHON313" -m venv "$VENV"
 fi
 
+# [AUDIT-5] Install pinned dependencies from requirements.txt
 echo "Installing Python dependencies..."
-"$VENV/bin/pip" install -q mlx-qwen3-asr sounddevice pynput rumps \
-    pyobjc-framework-Vision pyobjc-framework-Quartz pyobjc-framework-Cocoa 2>&1 | tail -3
+if [[ -f "$INSTALL_DIR/requirements.txt" ]]; then
+    "$VENV/bin/pip" install -q -r "$INSTALL_DIR/requirements.txt" 2>&1 | tail -5
+else
+    "$VENV/bin/pip" install -q mlx-qwen3-asr sounddevice pynput rumps \
+        pyobjc-framework-Vision pyobjc-framework-Quartz pyobjc-framework-Cocoa 2>&1 | tail -5
+fi
 
-# Compile Swift NER tools
+# [AUDIT-8] Compile Swift NER tools with error checking
 echo "Compiling NER tools..."
-swiftc -O -o "$INSTALL_DIR/ner_tool" "$INSTALL_DIR/ner_tool.swift"
-swiftc -O -o "$INSTALL_DIR/ner_daemon" "$INSTALL_DIR/ner_daemon.swift"
+if ! swiftc -O -o "$INSTALL_DIR/ner_tool" "$INSTALL_DIR/ner_tool.swift"; then
+    echo "Error: Failed to compile ner_tool.swift"
+    exit 1
+fi
+if ! swiftc -O -o "$INSTALL_DIR/ner_daemon" "$INSTALL_DIR/ner_daemon.swift"; then
+    echo "Error: Failed to compile ner_daemon.swift"
+    exit 1
+fi
 
-# Set up LaunchAgent
+# [AUDIT-4+6] Set up LaunchAgent with PATH, KeepAlive, WorkingDirectory
 echo "Setting up LaunchAgent..."
 PLIST="$HOME/Library/LaunchAgents/com.local.voiceinput.plist"
 cat > "$PLIST" << PLISTEOF
@@ -73,25 +106,37 @@ cat > "$PLIST" << PLISTEOF
     <key>RunAtLoad</key>
     <false/>
     <key>KeepAlive</key>
-    <false/>
+    <dict>
+        <key>SuccessfulExit</key>
+        <false/>
+    </dict>
+    <key>ThrottleInterval</key>
+    <integer>10</integer>
+    <key>ProcessType</key>
+    <string>Interactive</string>
+    <key>WorkingDirectory</key>
+    <string>$INSTALL_DIR</string>
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>PATH</key>
+        <string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+    </dict>
     <key>StandardOutPath</key>
     <string>$INSTALL_DIR/voice_input.log</string>
     <key>StandardErrorPath</key>
     <string>$INSTALL_DIR/voice_input.log</string>
-    <key>ProcessType</key>
-    <string>Interactive</string>
 </dict>
 </plist>
 PLISTEOF
 
-# Copy .app to /Applications
+# Copy .app to /Applications (optional — may need sudo)
 echo "Installing VoiceInk.app..."
 if [[ -d "$SCRIPT_DIR/VoiceInk.app" ]]; then
     sudo rm -rf /Applications/VoiceInk.app 2>/dev/null || true
-    sudo cp -R "$SCRIPT_DIR/VoiceInk.app" /Applications/
+    sudo cp -R "$SCRIPT_DIR/VoiceInk.app" /Applications/ 2>/dev/null || echo "  Skipped (no sudo). You can manually copy VoiceInk.app to /Applications/."
 elif [[ -d "$INSTALL_DIR/VoiceInk.app" ]]; then
     sudo rm -rf /Applications/VoiceInk.app 2>/dev/null || true
-    sudo cp -R "$INSTALL_DIR/VoiceInk.app" /Applications/
+    sudo cp -R "$INSTALL_DIR/VoiceInk.app" /Applications/ 2>/dev/null || echo "  Skipped (no sudo)."
 fi
 
 echo ""
@@ -102,9 +147,11 @@ echo "  Option 1: Click VoiceInk in /Applications/"
 echo "  Option 2: ~/.local/voice-input/start.sh"
 echo ""
 echo "First launch will download the ASR model (~3.4 GB)."
-echo "Grant these permissions when prompted:"
-echo "  - Accessibility (System Settings > Privacy > Accessibility)"
-echo "  - Microphone"
-echo "  - Screen Recording"
+echo "You will need to grant these permissions in System Settings > Privacy & Security:"
+echo "  1. Accessibility — for keyboard shortcut detection + text pasting"
+echo "  2. Microphone — for voice recording"
+echo "  3. Screen Recording — for context-aware transcription (optional)"
 echo ""
 echo "Controls: Hold right Option to talk, release to type."
+echo "          Double-tap right Option for toggle (hands-free) mode."
+echo "          Press Escape to cancel a recording."

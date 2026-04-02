@@ -120,6 +120,66 @@ Release Option → ASR transcribes with context → Paste text at cursor
 - **Keyboard**: pynput (Quartz event tap)
 - **Audio**: sounddevice (PortAudio)
 
+## System Requirements
+
+- **CPU**: Apple Silicon (M1/M2/M3/M4) — required for MLX
+- **macOS**: 14 (Sonoma) or newer
+- **RAM**: 8 GB minimum, 16 GB recommended
+- **Disk**: ~4 GB for ASR model download
+- **Homebrew**: required for Python 3.13 and ffmpeg
+
+## Troubleshooting
+
+### Nothing happens when I press right Option
+1. Check Accessibility permission: **System Settings > Privacy & Security > Accessibility** — make sure the Python process or VoiceInk is listed and enabled
+2. Check the log: `tail -20 ~/.local/voice-input/voice_input.log`
+3. The model may still be loading — wait for the "Ready" notification
+
+### Text doesn't appear after recording
+1. Check Accessibility permission (needed for Cmd+V simulation)
+2. Make sure the cursor is in a text field before recording
+3. Try a longer recording (very short recordings < 0.3s are skipped)
+
+### Model download is stuck
+The first launch downloads ~3.4 GB. Check your internet connection and try again:
+```bash
+pkill -f voice_input.py
+~/.local/voice-input/start.sh
+```
+
+### Menu bar icon not visible
+The icon is a small waveform `〰️` in the top-right menu bar area. It may be hidden behind other icons. Try clicking near the clock area.
+
+### Screen context not working
+Grant Screen Recording permission: **System Settings > Privacy & Security > Screen Recording**
+
+### Wrong microphone selected
+Click the menu bar icon > Microphone > select your preferred device. The preference is saved across restarts.
+
+### App crashes or freezes
+Check the log for errors:
+```bash
+tail -50 ~/.local/voice-input/voice_input.log
+```
+The app auto-restarts on crashes (via LaunchAgent KeepAlive). If issues persist, try reinstalling:
+```bash
+cd /path/to/VoiceInk
+./install.sh
+```
+
+## Uninstall
+
+```bash
+# Stop the app
+pkill -f voice_input.py
+launchctl bootout gui/$(id -u) ~/Library/LaunchAgents/com.local.voiceinput.plist 2>/dev/null
+
+# Remove files
+rm -rf ~/.local/voice-input
+rm -f ~/Library/LaunchAgents/com.local.voiceinput.plist
+sudo rm -rf /Applications/VoiceInk.app
+```
+
 ## License
 
 MIT
