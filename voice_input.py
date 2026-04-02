@@ -533,19 +533,20 @@ class VoiceInputApp(rumps.App):
             self._dock_hidden = True
             log.info("Dock icon hidden")
 
-        # [P1-4] Mic hot-plug: force PortAudio rescan when not recording
-        if self.stream is None:
-            try:
-                sd._terminate()
-                sd._initialize()
-            except Exception:
-                pass
-        current_devs = self._get_input_devices()
-        if current_devs != self._last_device_list:
-            self._last_device_list = current_devs
-            self._resolve_mic()
-            self._rebuild_mic_menu()
-            log.info("Audio devices changed, menu updated")
+        # [P1-4] Mic hot-plug: check device count change as a lightweight signal.
+        # We no longer call sd._terminate()/_initialize() which was destroying
+        # PortAudio every 2 seconds and causing freezes.
+        # Instead, just re-query devices (PortAudio returns cached list but
+        # the count/names change when macOS notifies PortAudio of device changes).
+        try:
+            current_devs = self._get_input_devices()
+            if current_devs != self._last_device_list:
+                self._last_device_list = current_devs
+                self._resolve_mic()
+                self._rebuild_mic_menu()
+                log.info("Audio devices changed, menu updated")
+        except Exception:
+            pass
 
         # Auto-reload dictionary
         try:
