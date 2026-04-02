@@ -359,11 +359,15 @@ class VoiceInputApp(rumps.App):
         auto_update_item = rumps.MenuItem("Auto-Update", callback=self._toggle_auto_update)
         auto_update_item.state = self._auto_update
 
+        self.hotkey_menu = rumps.MenuItem("Hotkey")
+        self._rebuild_hotkey_menu()
+
         self.menu = [
             self.status_item,
             None,
             self.history_menu,
             self.mic_menu,
+            self.hotkey_menu,
             self.ctx_item,
             rumps.MenuItem("Edit Dictionary", callback=self._edit_dict),
             None,
@@ -825,11 +829,43 @@ class VoiceInputApp(rumps.App):
         pb.setString_forType_(text, NSPasteboardTypeString)
         notify("VoiceInk", "Copied to clipboard")
 
+    # [P4-4] Hotkey selection menu
+    _HOTKEY_LABELS = {
+        "alt_r": "Right Option",
+        "alt_l": "Left Option",
+        "cmd_r": "Right Command",
+        "ctrl_r": "Right Control",
+        "f18": "F18",
+        "f19": "F19",
+        "f20": "F20",
+    }
+
+    def _rebuild_hotkey_menu(self):
+        try:
+            self.hotkey_menu.clear()
+        except AttributeError:
+            pass
+        current = self._settings.get("hotkey", DEFAULT_HOTKEY)
+        for key_name, label in self._HOTKEY_LABELS.items():
+            item = rumps.MenuItem(label, callback=self._select_hotkey)
+            item._voiceink_key = key_name
+            item.state = (key_name == current)
+            self.hotkey_menu[label] = item
+
+    def _select_hotkey(self, sender):
+        key_name = getattr(sender, "_voiceink_key", DEFAULT_HOTKEY)
+        self._hotkey = getattr(keyboard.Key, key_name, keyboard.Key.alt_r)
+        self._settings["hotkey"] = key_name
+        log.info("Hotkey changed to: %s", key_name)
+        self._rebuild_hotkey_menu()
+        self._save_settings()
+        notify("VoiceInk", f"Hotkey changed to {sender.title}. Takes effect immediately.")
+
     def _save_settings(self):
         save_settings({
             "preferred_mic": self.preferred_mic_name,
             "screen_context": self.screen_ctx_on,
-            "hotkey": self._settings.get("hotkey", DEFAULT_HOTKEY),
+            "hotkey": self._settings.get("hotkey", DEFAULT_HOTKEY),  # preserved from _select_hotkey
             "auto_update": self._auto_update,
             "history": self._history[:self._MAX_HISTORY],
         })
