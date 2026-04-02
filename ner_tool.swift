@@ -36,7 +36,9 @@ func isCleanTerm(_ word: String) -> Bool {
     if !word.contains(where: { $0.isLetter }) { return false }
 
     // Reject terms with non-ASCII artifacts (OCR garbage like "Él", "ÈThllfeature", "￿")
-    let asciiLetters = word.unicodeScalars.filter { $0.isASCII && ($0.value >= 65 && $0.value <= 122) }
+    let asciiLetters = word.unicodeScalars.filter {
+        ($0.value >= 65 && $0.value <= 90) || ($0.value >= 97 && $0.value <= 122)
+    }
     let nonAscii = word.unicodeScalars.filter { !$0.isASCII }
     if nonAscii.count > 0 && asciiLetters.count > 0 {
         // Mixed ASCII + non-ASCII like "CIaUdeÈ" — likely OCR garbage
@@ -47,15 +49,12 @@ func isCleanTerm(_ word: String) -> Bool {
     // e.g., "8y8te", "1tsf1", "a550ciated", "IJ17AfjL"
     let digits = word.filter { $0.isNumber }
     let letters = word.filter { $0.isLetter }
-    if digits.count > 0 && letters.count > 0 {
+    if digits.count > 0 && letters.count > 0 && word.count > 4 {
         let ratio = Double(digits.count) / Double(word.count)
-        // If 20-80% digits, likely garbage (pure numbers or pure text are fine)
-        if ratio > 0.2 && ratio < 0.8 { return false }
+        if ratio > 0.3 && ratio < 0.7 { return false }
     }
 
-    // Reject very short ALL-CAPS that are common OCR noise
-    // (real acronyms are usually 2-5 chars)
-    if word.count > 8 && word == word.uppercased() { return false }
+    if word.count > 15 && word == word.uppercased() { return false }
 
     return true
 }

@@ -15,19 +15,24 @@ func isCleanTerm(_ word: String) -> Bool {
     }
     if !word.contains(where: { $0.isLetter }) { return false }
 
+    // [BUG-7] Fixed ASCII letter range (was 65-122 which includes [\]^_`)
     let nonAscii = word.unicodeScalars.filter { !$0.isASCII }
-    let asciiLetters = word.unicodeScalars.filter { $0.isASCII && $0.value >= 65 && $0.value <= 122 }
+    let asciiLetters = word.unicodeScalars.filter {
+        ($0.value >= 65 && $0.value <= 90) || ($0.value >= 97 && $0.value <= 122)
+    }
     if nonAscii.count > 0 && asciiLetters.count > 0 {
         return false
     }
 
+    // [BUG-7] Allow short alphanumeric terms (GPT4, M1, H100)
     let digits = word.filter { $0.isNumber }
     let letters = word.filter { $0.isLetter }
-    if digits.count > 0 && letters.count > 0 {
+    if digits.count > 0 && letters.count > 0 && word.count > 4 {
         let ratio = Double(digits.count) / Double(word.count)
-        if ratio > 0.2 && ratio < 0.8 { return false }
+        if ratio > 0.3 && ratio < 0.7 { return false }
     }
-    if word.count > 8 && word == word.uppercased() { return false }
+    // [BUG-7] Raised threshold: allow ANTHROPIC, MICROSOFT (was >8)
+    if word.count > 15 && word == word.uppercased() { return false }
     return true
 }
 

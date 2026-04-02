@@ -180,12 +180,14 @@ def play_sound(name):
 
 
 def notify(title, body):
-    # [P2-5] start_new_session prevents zombies
+    # [BUG-11] Escape quotes to prevent osascript injection
+    safe_title = title.replace("\\", "\\\\").replace('"', '\\"')
+    safe_body = body.replace("\\", "\\\\").replace('"', '\\"')
     subprocess.Popen(
         [
             "osascript",
             "-e",
-            f'display notification "{body}" with title "{title}"',
+            f'display notification "{safe_body}" with title "{safe_title}"',
         ],
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
@@ -284,15 +286,14 @@ def get_screen_text():
 # ── App ───────────────────────────────────────────────────────────
 
 
-_SYMBOL = _DEFAULTS["symbol"]
-
-
 class VoiceInputApp(rumps.App):
     def __init__(self):
         from AppKit import NSImage
 
+        # [BUG-8] Read symbol from _DEFAULTS which is updated by load_settings()
+        symbol = _DEFAULTS["symbol"]
         icon_img = NSImage.imageWithSystemSymbolName_variableValue_accessibilityDescription_(
-            _SYMBOL, 1.0, None
+            symbol, 1.0, None
         )
         if icon_img:
             icon_img.setTemplate_(True)
@@ -320,8 +321,14 @@ class VoiceInputApp(rumps.App):
         self._history = self._settings.get("history", [])[:self._MAX_HISTORY]
 
         # [P4-4] Configurable hotkey
+        # [BUG-16] Validate hotkey name and log warning on fallback
         hotkey_name = self._settings.get("hotkey", DEFAULT_HOTKEY)
-        self._hotkey = getattr(keyboard.Key, hotkey_name, keyboard.Key.alt_r)
+        resolved = getattr(keyboard.Key, hotkey_name, None)
+        if resolved is None:
+            log.warning("Invalid hotkey '%s' in settings, falling back to alt_r", hotkey_name)
+            resolved = keyboard.Key.alt_r
+            hotkey_name = "alt_r"
+        self._hotkey = resolved
         log.info("Hotkey: %s", hotkey_name)
         self.screen_ctx_on = self._settings.get("screen_context", _HAS_VISION)
         self.screen_text = ""
@@ -520,13 +527,17 @@ class VoiceInputApp(rumps.App):
         visual = self.state.visual
         self._apply_effect(visual)
 
-        # [P2-3] Auto-stop long recordings
-        if self.state in (State.RECORDING_HOLD, State.RECORDING_TOGGLE):
-            if self._rec_start_time and (time.time() - self._rec_start_time) > MAX_RECORDING_SECS:
-                log.warning("Max recording duration reached (%ds)", MAX_RECORDING_SECS)
-                notify("VoiceInk", f"Max {MAX_RECORDING_SECS // 60}min reached, transcribing…")
-                with self.lock:
-                    self.state = State.IDLE
+        # [BUG-13] Rebuild history menu on main thread
+        if getattr(self, "_history_dirty", False):
+            self._rebuild_history_menu()
+            self._history_dirty = False
+
+        # [BUG-2] State check INSIDE lock to prevent TOCTOU race
+        with self.lock:
+            if self.state in (State.RECORDING_HOLD, State.RECORDING_TOGGLE):
+                if self._rec_start_time and (time.time() - self._rec_start_time) > MAX_RECORDING_SECS:
+                    log.warning("Max recording duration reached (%ds)", MAX_RECORDING_SECS)
+                    notify("VoiceInk", f"Max {MAX_RECORDING_SECS // 60}min reached, transcribing…")
                     self._stop_rec_and_transcribe()
 
         # Hide Dock icon (one-shot)
@@ -673,7 +684,20 @@ class VoiceInputApp(rumps.App):
                 )
             log.info("NER tools recompiled")
 
-            # Restart process
+            # [BUG-10] Clean up before restart
+            if hasattr(self, "_ner_proc") and self._ner_proc:
+                try:
+                    self._ner_proc.stdin.close()
+                    self._ner_proc.terminate()
+                except Exception:
+                    pass
+            if self.stream:
+                try:
+                    self.stream.stop()
+                    self.stream.close()
+                except Exception:
+                    pass
+
             log.info("Restarting VoiceInk...")
             notify("VoiceInk", "Updated! Restarting...")
             time.sleep(1)
@@ -721,6 +745,7 @@ class VoiceInputApp(rumps.App):
 
         # Check Accessibility permission
         security = ctypes.cdll.LoadLibrary(ctypes.util.find_library("ApplicationServices"))
+        security.AXIsProcessTrusted.restype = ctypes.c_bool  # [BUG-17] Correct return type
         try:
             trusted = security.AXIsProcessTrusted()
             if not trusted:
@@ -740,22 +765,21 @@ class VoiceInputApp(rumps.App):
         except Exception as e:
             log.warning("Could not check Accessibility permission: %s", e)
 
-        # Check Screen Recording (try a test capture)
+        # [BUG-3] Use CGPreflightScreenCaptureAccess (macOS 10.15.4+)
         if _HAS_VISION:
-            test_img = Quartz.CGWindowListCreateImage(
-                Quartz.CGRectMake(0, 0, 1, 1),
-                Quartz.kCGWindowListOptionOnScreenOnly,
-                Quartz.kCGNullWindowID,
-                Quartz.kCGWindowImageDefault,
-            )
-            if test_img is None:
-                log.warning("Screen Recording permission not granted")
-                notify(
-                    "VoiceInk",
-                    "Grant Screen Recording permission for context-aware transcription",
-                )
-            else:
-                log.info("Screen Recording permission: granted")
+            try:
+                has_access = Quartz.CGPreflightScreenCaptureAccess()
+                if not has_access:
+                    log.warning("Screen Recording permission not granted")
+                    Quartz.CGRequestScreenCaptureAccess()
+                    notify(
+                        "VoiceInk",
+                        "Grant Screen Recording permission for context-aware transcription",
+                    )
+                else:
+                    log.info("Screen Recording permission: granted")
+            except AttributeError:
+                log.info("Screen Recording permission check not available on this macOS")
 
     # ── Menu callbacks ────────────────────────────────────────
 
@@ -802,8 +826,8 @@ class VoiceInputApp(rumps.App):
         self._history.insert(0, text)
         if len(self._history) > self._MAX_HISTORY:
             self._history = self._history[: self._MAX_HISTORY]
-        self._rebuild_history_menu()
-        self._save_settings()  # persist across restarts
+        self._history_dirty = True  # [BUG-13] Defer menu rebuild to main thread
+        self._save_settings()
 
     def _rebuild_history_menu(self):
         try:
@@ -816,8 +840,14 @@ class VoiceInputApp(rumps.App):
             return
         for i, text in enumerate(self._history):
             label = text[:60] + ("…" if len(text) > 60 else "")
+            # [BUG-12] Disambiguate duplicate labels
+            base_label = label
+            suffix = 2
+            while label in self.history_menu:
+                label = f"{base_label} ({suffix})"
+                suffix += 1
             item = rumps.MenuItem(label, callback=self._copy_history)
-            item._voiceink_full_text = text  # stash full text
+            item._voiceink_full_text = text
             self.history_menu[label] = item
 
     def _copy_history(self, sender):
@@ -862,13 +892,15 @@ class VoiceInputApp(rumps.App):
         notify("VoiceInk", f"Hotkey changed to {sender.title}. Takes effect immediately.")
 
     def _save_settings(self):
-        save_settings({
+        # [BUG-9] Merge into existing settings to preserve user config keys
+        self._settings.update({
             "preferred_mic": self.preferred_mic_name,
             "screen_context": self.screen_ctx_on,
-            "hotkey": self._settings.get("hotkey", DEFAULT_HOTKEY),  # preserved from _select_hotkey
+            "hotkey": self._settings.get("hotkey", DEFAULT_HOTKEY),
             "auto_update": self._auto_update,
             "history": self._history[:self._MAX_HISTORY],
         })
+        save_settings(self._settings)
 
     def _edit_dict(self, _):
         subprocess.Popen(["open", str(DICT_PATH)])
@@ -927,7 +959,8 @@ class VoiceInputApp(rumps.App):
         log.info("Recording started")
 
         if self.screen_ctx_on:
-            self._ocr_done.clear()  # [P2-2] mark OCR as pending
+            self.screen_text = ""  # [BUG-5] Clear stale context before new OCR
+            self._ocr_done.clear()
             threading.Thread(target=self._capture_screen, daemon=True).start()
 
     # [P4-6] Cancel recording without transcribing
@@ -1069,7 +1102,7 @@ class VoiceInputApp(rumps.App):
         if not frames:
             self.state = State.IDLE
             return
-        audio = np.concatenate(frames)
+        audio = np.concatenate(frames).flatten()  # [BUG-6] Ensure 1D array for ASR
         duration = len(audio) / SAMPLE_RATE
         if duration < 0.3:
             log.info("Audio too short (%.1fs), skipped", duration)
@@ -1103,21 +1136,27 @@ class VoiceInputApp(rumps.App):
         finally:
             self.state = State.IDLE
 
+    _MAX_CLIPBOARD_BYTES = 10 * 1024 * 1024  # [BUG-4] 10MB cap for clipboard save
+
     def _type_text(self, text):
-        # [P2-1] Serialize clipboard operations
-        # [P3-2] Direct NSPasteboard — ~30ms vs ~180ms with pbcopy/pbpaste
         with self._type_lock:
             from AppKit import NSPasteboard, NSPasteboardTypeString
 
             pb = NSPasteboard.generalPasteboard()
 
-            # Save current clipboard content
-            old_types = pb.types()
+            # [BUG-4] Save clipboard with size cap to prevent memory spike
             old_data = {}
+            total_bytes = 0
+            old_types = pb.types()
             if old_types:
                 for t in old_types:
                     d = pb.dataForType_(t)
                     if d:
+                        total_bytes += d.length()
+                        if total_bytes > self._MAX_CLIPBOARD_BYTES:
+                            log.warning("Clipboard too large (%d bytes), skipping restore", total_bytes)
+                            old_data = {}
+                            break
                         old_data[str(t)] = d
 
             # Set transcribed text
@@ -1130,8 +1169,8 @@ class VoiceInputApp(rumps.App):
             self.kb.tap("v")
             self.kb.release(keyboard.Key.cmd)
 
-            # Restore original clipboard
-            time.sleep(0.05)
+            # [BUG-1] Wait longer for slow apps (Electron, Java) to read clipboard
+            time.sleep(0.3)
             if old_data:
                 pb.clearContents()
                 for t, d in old_data.items():
