@@ -264,6 +264,9 @@ def capture_screens():
                 break
 
         # 2. Capture remaining screens for additional context
+        # Note: frontmost window content will be duplicated in screen captures,
+        # but NER deduplicates entities by lowercase key, so the final context
+        # has no duplicates. The only cost is NER processing slightly more text.
         for screen in NSScreen.screens():
             frame = screen.frame()
             rect = Quartz.CGRectMake(
