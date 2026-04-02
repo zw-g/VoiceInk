@@ -1324,8 +1324,16 @@ class VoiceInputApp(rumps.App):
                 if len(terms) >= self._MAX_CONTEXT_TERMS:
                     break
                 key = w.lower()
-                # Quality gate — reject garbage
-                if len(key) > 25 or sum(1 for c in key if c.isdigit()) > len(key) * 0.3:
+                # Quality gate — reject garbage from OCR
+                if len(key) < 2 or len(key) > 25:
+                    continue
+                if sum(1 for c in key if c.isdigit()) > len(key) * 0.3:
+                    continue
+                # Reject terms starting with digits, punctuation, or special chars
+                if not key[0].isalpha():
+                    continue
+                # Reject terms with non-alphanumeric chars (OCR artifacts)
+                if any(c not in "abcdefghijklmnopqrstuvwxyz0123456789 -'" for c in key):
                     continue
                 if key not in terms:
                     terms[key] = w
@@ -1346,6 +1354,10 @@ class VoiceInputApp(rumps.App):
             self.state = State.IDLE
             play_sound("Funk")  # [P4-2] no-speech feedback
             return
+
+        rms = float(np.sqrt(np.mean(audio ** 2)))
+        peak = float(np.max(np.abs(audio)))
+        log.info("Audio level: RMS=%.4f peak=%.4f (%.1fs)", rms, peak, duration)
 
         try:
             with Timer("Transcription"):
