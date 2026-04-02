@@ -1271,6 +1271,19 @@ class VoiceInputApp(rumps.App):
             self._clipboard_paste(text)
             log.info("Typed %d chars via clipboard paste", len(text))
 
+    # Browsers report AXSelectedText as settable but silently ignore writes
+    _AX_SKIP_BUNDLES = frozenset({
+        "com.google.Chrome",
+        "com.google.Chrome.canary",
+        "com.brave.Browser",
+        "com.microsoft.edgemac",
+        "org.chromium.Chromium",
+        "company.thebrowser.Browser",  # Arc
+        "com.operasoftware.Opera",
+        "org.mozilla.firefox",
+        "com.apple.Safari",  # Safari web fields also unreliable with AX
+    })
+
     def _try_ax_insert(self, text):
         """Insert text via Accessibility API. Returns True if successful."""
         try:
@@ -1284,6 +1297,12 @@ class VoiceInputApp(rumps.App):
 
             ws = NSWorkspace.sharedWorkspace()
             app = ws.frontmostApplication()
+
+            # Skip browsers — AX writes silently fail in web content
+            bundle_id = app.bundleIdentifier() or ""
+            if bundle_id in self._AX_SKIP_BUNDLES:
+                return False
+
             app_elem = AXUIElementCreateApplication(app.processIdentifier())
             err, focused = AXUIElementCopyAttributeValue(
                 app_elem, "AXFocusedUIElement", None
