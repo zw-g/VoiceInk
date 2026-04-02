@@ -637,7 +637,7 @@ class VoiceInputApp(rumps.App):
         # the CGEvent tap was likely disabled by macOS.
         if self.state == State.RECORDING_HOLD and self._rec_start_time:
             hold_time = time.time() - self._rec_start_time
-            if hold_time > 30:
+            if hold_time > 60:
                 log.warning("Watchdog: RECORDING_HOLD stuck for %.0fs, forcing cancel", hold_time)
                 threading.Thread(target=self._watchdog_cancel, daemon=True).start()
 
@@ -1085,6 +1085,7 @@ class VoiceInputApp(rumps.App):
                 samplerate=SAMPLE_RATE,
                 channels=1,
                 dtype="float32",
+                blocksize=512,  # 32ms at 16kHz — predictable VAD frame timing
                 callback=self._audio_cb,
             )
             self.stream.start()
