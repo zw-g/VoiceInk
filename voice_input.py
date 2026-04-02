@@ -52,17 +52,6 @@ DOUBLE_CLICK_WINDOW = _DEFAULTS["double_click_window"]
 MAX_RECORDING_SECS = _DEFAULTS["max_recording_secs"]
 DEFAULT_HOTKEY = _DEFAULTS["hotkey"]
 
-# Map string names to pynput Key objects
-_HOTKEY_MAP = {
-    "alt_r": "Key.alt_r",
-    "alt_l": "Key.alt_l",
-    "cmd_r": "Key.cmd_r",
-    "ctrl_r": "Key.ctrl_r",
-    "f18": "Key.f18",
-    "f19": "Key.f19",
-    "f20": "Key.f20",
-}
-
 CONFIG_DIR = Path.home() / ".local" / "voice-input"
 DICT_PATH = CONFIG_DIR / "dictionary.json"
 SETTINGS_PATH = CONFIG_DIR / "settings.json"
@@ -590,6 +579,7 @@ class VoiceInputApp(rumps.App):
             notify("VoiceInk", f"Model failed: {e}")
             # [P1-3] UI update via main thread is best-effort here
             self.status_item.title = "Model failed"
+            self.state = State.IDLE  # Stop spinning icon
             return
 
         self._start_ner_daemon()
@@ -974,6 +964,7 @@ class VoiceInputApp(rumps.App):
             self.stream = None
         self._rec_start_time = 0.0
         self.audio_frames = []
+        self._ocr_done.set()  # Prevent stale OCR from affecting next recording
         self.title = ""
         play_sound("Funk")
         log.info("Recording cancelled")
