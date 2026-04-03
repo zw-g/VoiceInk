@@ -247,7 +247,7 @@ def normalize_numbers(text):
 
 # ── LLM Text Polish ──────────────────────────────────────────────
 
-_LLM_MODEL_ID = "Qwen/Qwen3-1.7B-MLX-4bit"
+_LLM_MODEL_ID = "Qwen/Qwen3-8B-MLX-4bit"
 
 _LLM_SYSTEM_PROMPT = """\
 你是语音转文字的后处理工具。只输出处理后的文本，不要解释。

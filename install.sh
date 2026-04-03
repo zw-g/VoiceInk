@@ -81,8 +81,8 @@ fi
 echo "Downloading ML models (this may take a few minutes on first install)..."
 echo "  Downloading ASR model (Qwen3-ASR-1.7B, ~3.4 GB)..."
 "$VENV/bin/python" -c "from huggingface_hub import snapshot_download; snapshot_download('Qwen/Qwen3-ASR-1.7B')" 2>&1 | tail -2
-echo "  Downloading text polish model (Qwen3-1.7B-MLX-4bit, ~900 MB)..."
-"$VENV/bin/python" -c "from huggingface_hub import snapshot_download; snapshot_download('Qwen/Qwen3-1.7B-MLX-4bit')" 2>&1 | tail -2
+echo "  Downloading text polish model (Qwen3-8B-MLX-4bit, ~4.1 GB)..."
+"$VENV/bin/python" -c "from huggingface_hub import snapshot_download; snapshot_download('Qwen/Qwen3-8B-MLX-4bit')" 2>&1 | tail -2
 echo "Models ready."
 
 # [AUDIT-8] Compile Swift NER tools with error checking
