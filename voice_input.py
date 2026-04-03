@@ -245,6 +245,78 @@ def normalize_numbers(text):
     return text
 
 
+# ── LLM Text Polish ──────────────────────────────────────────────
+
+_LLM_MODEL_ID = "Qwen/Qwen3-1.7B-MLX-4bit"
+
+_LLM_SYSTEM_PROMPT = """\
+你是语音转文字的后处理工具。只输出处理后的文本，不要解释。
+
+规则：
+1. 去掉语气词（呃、嗯、那个、就是说、然后呢）
+2. 口语符号转符号（大于→>，小于→<，等于→=，加→+，减→-，乘以→×）
+3. 轻微整理，保持通顺
+4. 不要改变原意、语气和人称
+5. 不要修改数字、已有符号和专有名词
+6. 不要把问句改成陈述句"""
+
+
+class TextPolisher:
+    """LLM-based text post-processor using Qwen3-1.7B on MLX."""
+
+    def __init__(self):
+        self._model = None
+        self._tokenizer = None
+        self._sampler = None
+        self._loaded = False
+
+    def load(self):
+        """Load the LLM model. Call from background thread."""
+        try:
+            from mlx_lm import load as mlx_load
+            from mlx_lm.sample_utils import make_sampler
+
+            log.info("Loading text polish model %s", _LLM_MODEL_ID)
+            self._model, self._tokenizer = mlx_load(_LLM_MODEL_ID)
+            self._sampler = make_sampler(temp=0.3, top_p=0.8, top_k=20)
+            self._loaded = True
+            log.info("Text polish model loaded")
+        except Exception as e:
+            log.warning("Text polish model failed to load: %s", e)
+            self._loaded = False
+
+    def polish(self, text):
+        """Polish text using the LLM. Returns original text on failure."""
+        if not self._loaded or not text.strip():
+            return text
+        try:
+            from mlx_lm import generate
+
+            messages = [
+                {"role": "system", "content": _LLM_SYSTEM_PROMPT},
+                {"role": "user", "content": text + "\n/no_think"},
+            ]
+            prompt = self._tokenizer.apply_chat_template(
+                messages, add_generation_prompt=True
+            )
+            raw = generate(
+                self._model, self._tokenizer, prompt=prompt,
+                max_tokens=max(len(text) * 3, 200),
+                sampler=self._sampler, verbose=False,
+            )
+            # Strip thinking block if present
+            clean = re.sub(r"<think>.*?</think>\s*", "", raw, flags=re.DOTALL).strip()
+
+            # Safety: if output is empty or wildly different length, use original
+            if not clean or len(clean) < len(text) * 0.3 or len(clean) > len(text) * 2:
+                log.warning("Text polish output rejected (len %d→%d), using original", len(text), len(clean))
+                return text
+            return clean
+        except Exception as e:
+            log.warning("Text polish failed: %s", e)
+            return text
+
+
 # ── Utilities ─────────────────────────────────────────────────────
 
 DEFAULT_DICT = {
@@ -486,6 +558,8 @@ class VoiceInputApp(rumps.App):
         self.kb = keyboard.Controller()
         self._rec_start_time = 0.0
         self._vad = SimpleVAD()  # [AUDIT-20] Real-time VAD for auto-stop
+        self._polisher = TextPolisher()
+        self._text_polish = self._settings.get("text_polish", True)
         self._MAX_HISTORY = 30
         self._history = self._settings.get("history", [])[:self._MAX_HISTORY]
 
@@ -528,6 +602,9 @@ class VoiceInputApp(rumps.App):
         )
         self.ctx_item.state = self.screen_ctx_on
 
+        self.polish_item = rumps.MenuItem("Text Polish (AI)", callback=self._toggle_polish)
+        self.polish_item.state = self._text_polish
+
         self.history_menu = rumps.MenuItem("Recent Transcriptions")
         self._rebuild_history_menu()
 
@@ -545,6 +622,7 @@ class VoiceInputApp(rumps.App):
             self.mic_menu,
             self.hotkey_menu,
             self.ctx_item,
+            self.polish_item,
             rumps.MenuItem("Edit Dictionary", callback=self._edit_dict),
             None,
             rumps.MenuItem("Check for Updates", callback=self._manual_update),
@@ -809,6 +887,10 @@ class VoiceInputApp(rumps.App):
         if self._auto_update:
             threading.Thread(target=self._auto_update_check, daemon=True).start()
 
+        # Load text polish model (non-blocking — app is usable without it)
+        if self._text_polish:
+            self._polisher.load()
+
         self.state = State.IDLE
         self.status_item.title = "Ready"
         notify("VoiceInk", "Ready — use right Option key")
@@ -972,6 +1054,13 @@ class VoiceInputApp(rumps.App):
         sender.state = self._auto_update
         self._settings["auto_update"] = self._auto_update
         self._save_settings()
+
+    def _toggle_polish(self, sender):
+        self._text_polish = not self._text_polish
+        sender.state = self._text_polish
+        self._settings["text_polish"] = self._text_polish
+        self._save_settings()
+        log.info("Text Polish: %s", "enabled" if self._text_polish else "disabled")
         log.info("Auto-update: %s", "enabled" if self._auto_update else "disabled")
 
     # ── Permission checks [P4-1] ─────────────────────────────
@@ -1136,6 +1225,7 @@ class VoiceInputApp(rumps.App):
             "screen_context": self.screen_ctx_on,
             "hotkey": self._settings.get("hotkey", DEFAULT_HOTKEY),
             "auto_update": self._auto_update,
+            "text_polish": self._text_polish,
             "history": self._history[:self._MAX_HISTORY],
         })
         save_settings(self._settings)
@@ -1476,8 +1566,11 @@ class VoiceInputApp(rumps.App):
                 play_sound("Funk")  # [P4-2]
                 return
 
-            # Inverse Text Normalization: spoken numbers → digits
+            # Post-processing pipeline: ITN → LLM polish
             text = normalize_numbers(text)
+            if self._text_polish:
+                with Timer("Text polish"):
+                    text = self._polisher.polish(text)
 
             log.info("Result: %s", text)
             self._add_to_history(text)
