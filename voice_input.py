@@ -41,7 +41,7 @@ _DEFAULTS = {
     "model": "Qwen/Qwen3-ASR-1.7B",
     "sample_rate": 16000,
     "double_click_window": 0.35,
-    "max_recording_secs": 600,
+    "max_recording_secs": 1800,
     "hotkey": "alt_r",
     "ocr_languages": ["en", "zh-Hans", "zh-Hant"],
     "symbol": "waveform",
@@ -638,7 +638,6 @@ class VoiceInputApp(rumps.App):
 
         self._dock_hidden = False
         self._dict_mtime = 0.0
-        self._vad_stop_requested = False
         self._keyboard_listener = None
         self._ner_lock = threading.Lock()
         self._last_key_event_time = 0.0
@@ -780,7 +779,7 @@ class VoiceInputApp(rumps.App):
                     self.preferred_mic_name,
                 )
 
-    @rumps.timer(2)
+    @rumps.timer(1)
     def _periodic(self, timer):
         """Main-thread timer: icon state, Dock hiding, mic hot-plug, dict reload, watchdog."""
         # ── Apply icon effect based on state (unified state machine) ──
@@ -816,10 +815,10 @@ class VoiceInputApp(rumps.App):
         # Watchdog: detect stuck RECORDING_HOLD (keyboard listener may have died).
         # Only trigger if audio has ALSO stopped flowing — this distinguishes
         # "listener died" from "user is legitimately recording for a long time".
-        if self.state == State.RECORDING_HOLD and self._rec_start_time:
+        if self.state in (State.RECORDING_HOLD, State.RECORDING_TOGGLE) and self._rec_start_time:
             hold_time = time.time() - self._rec_start_time
             audio_alive = (time.monotonic() - self._last_audio_cb_time) < 5.0
-            if hold_time > 60 and not audio_alive:
+            if hold_time > 3 and not audio_alive:
                 log.warning("Watchdog: RECORDING_HOLD for %.0fs with no audio, listener likely dead", hold_time)
                 threading.Thread(target=self._watchdog_cancel, daemon=True).start()
 
@@ -853,7 +852,7 @@ class VoiceInputApp(rumps.App):
     def _watchdog_cancel(self):
         """Force-stop a stuck recording, transcribe it, and restart the listener."""
         with self.lock:
-            if self.state == State.RECORDING_HOLD:
+            if self.state in (State.RECORDING_HOLD, State.RECORDING_TOGGLE):
                 log.warning("Watchdog: force-stopping stuck recording, transcribing audio")
                 notify("VoiceInk", "Key release missed — transcribing anyway")
                 self._stop_rec_and_transcribe()
@@ -1270,7 +1269,6 @@ class VoiceInputApp(rumps.App):
         self.audio_frames = []
         self._rec_start_time = time.time()
         self._vad.reset()
-        self._vad_stop_requested = False
 
         # [P1-2] Crash protection for mic errors
         try:
@@ -1341,21 +1339,6 @@ class VoiceInputApp(rumps.App):
             log.warning("Audio callback status: %s", status)
         self._last_audio_cb_time = time.monotonic()
         self.audio_frames.append(indata.copy())
-
-        # [AUDIT-20] VAD auto-stop in toggle mode (guarded to prevent thread storm)
-        if self.state == State.RECORDING_TOGGLE:
-            _, should_stop = self._vad.process_frame(indata[:, 0])
-            if should_stop and not self._vad_stop_requested:
-                self._vad_stop_requested = True
-                log.info("VAD: silence detected, auto-stopping toggle recording")
-                threading.Thread(target=self._vad_auto_stop, daemon=True).start()
-
-    def _vad_auto_stop(self):
-        """Auto-stop toggle recording when VAD detects sustained silence."""
-        with self.lock:
-            if self.state == State.RECORDING_TOGGLE:
-                self._pending_status_title = "Ready"
-                self._stop_rec_and_transcribe()
 
     def _capture_screen(self):
         try:
