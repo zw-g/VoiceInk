@@ -264,7 +264,7 @@ _LLM_SYSTEM_PROMPT = """\
 
 
 class TextPolisher:
-    """LLM-based text post-processor using Qwen3-1.7B on MLX."""
+    """LLM-based text post-processor using Qwen3-8B on MLX."""
 
     def __init__(self):
         self._model = None
