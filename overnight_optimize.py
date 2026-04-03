@@ -211,6 +211,10 @@ TESTS = [
     ("我们现在不是知道怎么样去找我们的universe的POC了吗有个很准确的方法然后我们有一个pipeline",
      "我们现在不是知道怎么样去找我们的universe的POC了吗？有个很准确的方法，然后我们有一个pipeline", "real_notranslate"),
 
+    # ─── English number conversion in mixed context ───
+    ("你刚刚又找出了一些不是active的experiment from the last twenty eight days不是active的universe",
+     "你刚刚又找出了一些不是active的experiment from the last 28 days，不是active的universe", "real_notranslate"),
+
     # ─── Long bilingual real-world (code-switching heavy) ───
     ("虽然两个小孩没有办法真正的做到fifty percent那么一碗水端平but mom has tried my best",
      "虽然两个小孩没有办法真正的做到50%那么一碗水端平，but mom has tried my best", "real_long"),
