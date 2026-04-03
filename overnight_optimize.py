@@ -211,6 +211,24 @@ TESTS = [
     ("我们现在不是知道怎么样去找我们的universe的POC了吗有个很准确的方法然后我们有一个pipeline",
      "我们现在不是知道怎么样去找我们的universe的POC了吗？有个很准确的方法，然后我们有一个pipeline", "real_notranslate"),
 
+    # ─── Long bilingual real-world (code-switching heavy) ───
+    ("虽然两个小孩没有办法真正的做到fifty percent那么一碗水端平but mom has tried my best",
+     "虽然两个小孩没有办法真正的做到50%那么一碗水端平，but mom has tried my best", "real_long"),
+    ("你真的长大了I'm so happy No we just feel so touched他们也喜欢被尊重的感觉",
+     "你真的长大了，I'm so happy. No, we just feel so touched. 他们也喜欢被尊重的感觉", "real_long"),
+    ("In my childhood I really hate my parents yelling at me in public It's so awkward and embarrassing",
+     "In my childhood, I really hate my parents yelling at me in public. It's so awkward and embarrassing.", "real_long"),
+    ("So妈妈说再也不可以这样子来对待我的小孩谢谢你Jacob",
+     "So，妈妈说再也不可以这样子来对待我的小孩。谢谢你，Jacob", "real_long"),
+    ("Come on babies come here give mommy一个抱一下那我们开心去吃饭OK Good let's go",
+     "Come on babies, come here, give mommy一个抱一下。那我们开心去吃饭，OK? Good, let's go.", "real_long"),
+    ("嗯你可以再选一个别的东西好吗吃完饭去一起去挑吧",
+     "你可以再选一个别的东西，好吗？吃完饭一起去挑吧", "real_long"),
+    ("OK你可以一整天逛完了之后我们再make a decision好吗",
+     "OK，你可以一整天逛完了之后，我们再make a decision，好吗？", "real_long"),
+    ("上次那件事情我在大家面前吼你的事情可不可以原谅妈咪",
+     "上次那件事情，我在大家面前吼你的事情，可不可以原谅妈咪？", "real_long"),
+
     # ─── Edge Cases (10) ───
     ("呃嗯就是说然后呢那个", "", "edge"),
     ("好", "好", "edge"),
