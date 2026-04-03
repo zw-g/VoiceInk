@@ -46,3 +46,4 @@ typer==0.24.1
 typing_extensions==4.15.0
 cn2an==0.5.23
 word2number==1.1
+wetext==0.1.2

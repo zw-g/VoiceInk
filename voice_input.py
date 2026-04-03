@@ -216,18 +216,29 @@ def _en_itn(text):
 
 
 def normalize_numbers(text):
-    """Convert spoken number words to Arabic numerals (Chinese + English)."""
-    # Chinese ITN via cn2an
-    try:
-        import cn2an
+    """Convert spoken number words to Arabic numerals (Chinese + English).
 
-        text = cn2an.transform(text, "cn2an")
-        # Fix false positives: 一些→1些, 一下子→1下子, etc.
-        text = _CN_REVERT.sub(r"一\1", text)
+    Chinese: uses wetext (WeNet ITN) — context-aware, preserves idioms.
+    English: uses word2number — handles multi-word numbers and percentages.
+    """
+    # Chinese ITN via wetext (professional, context-aware)
+    try:
+        from wetext import Normalizer
+
+        if not hasattr(normalize_numbers, "_zh_itn"):
+            normalize_numbers._zh_itn = Normalizer(lang="zh", operator="itn")
+        text = normalize_numbers._zh_itn.normalize(text)
     except ImportError:
-        pass
+        # Fallback to cn2an if wetext not available
+        try:
+            import cn2an
+
+            text = cn2an.transform(text, "cn2an")
+            text = _CN_REVERT.sub(r"一\1", text)
+        except (ImportError, Exception):
+            pass
     except Exception as e:
-        log.debug("cn2an error: %s", e)
+        log.debug("wetext ITN error: %s", e)
 
     # English ITN
     text = _en_itn(text)
