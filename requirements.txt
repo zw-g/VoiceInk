@@ -44,3 +44,5 @@ soundfile==0.13.1
 tqdm==4.67.3
 typer==0.24.1
 typing_extensions==4.15.0
+cn2an==0.5.23
+word2number==1.1
