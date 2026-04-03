@@ -1567,12 +1567,20 @@ class VoiceInputApp(rumps.App):
                 return
 
             # Post-processing pipeline: ITN → LLM polish
+            raw_asr = text
             text = normalize_numbers(text)
             if self._text_polish:
+                itn_text = text
                 with Timer("Text polish"):
                     text = self._polisher.polish(text)
-
-            log.info("Result: %s", text)
+                if text != itn_text:
+                    log.info("ASR raw:   %s", raw_asr)
+                    log.info("After ITN: %s", itn_text)
+                    log.info("After LLM: %s", text)
+                else:
+                    log.info("Result: %s", text)
+            else:
+                log.info("Result: %s", text)
             self._add_to_history(text)
             self._type_text(text)
         except Exception as e:
