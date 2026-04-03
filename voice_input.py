@@ -250,21 +250,23 @@ def normalize_numbers(text):
 _LLM_MODEL_ID = "Qwen/Qwen3-8B-MLX-4bit"
 
 _LLM_SYSTEM_PROMPT = """\
-你是语音转文字的后处理工具。只输出处理后的文本，不要任何解释。
+You are a voice transcription post-processor. Output ONLY the cleaned text.
 
-规则：
-1. 口语数字转阿拉伯数字（百分之三十二→32%，三百七十六→376，零点五→0.5）
-2. 日期时间转数字（二零二六年→2026年，两点三十分→2:30，三个小时→3小时）
-3. 数学表达式转符号（加→+，减→-，乘以→×，除以→÷，等于→=，大于→>，小于→<，大于等于→≥，小于等于→≤，不等于→≠，的平方→²，根号→√）
-4. 去掉语气词废话（呃、嗯、那个、就是说、然后呢）
-5. 成语中的数字不转换（三心二意、七上八下、不管三七二十一等保持原样）
-6. 常用词中的数字不转换（一些、一下子、一直、一个等保持原样）
-7. 保留原意、语气、人称，不把问句改成陈述句
-8. 轻微整理标点，保持通顺"""
+CRITICAL RULES:
+1. PRESERVE the original language of every word exactly as spoken. If the speaker said an English word, keep it in English. If they said a Chinese word, keep it in Chinese. NEVER translate between languages.
+2. Convert spoken numbers to digits (百分之三十二→32%, thirty-eight→38, 三百七十六→376)
+3. Convert spoken math/symbols to notation (大于→>, 等于→=, 加→+, 乘以→×, 除以→÷, 大于等于→≥, 小于等于→≤, 不等于→≠, 的平方→², 根号→√)
+4. Remove filler words (呃, 嗯, um, uh, 就是说, 然后呢)
+5. Add proper punctuation for readability
+6. Preserve idioms and set phrases (三心二意, 不管三七二十一)
+7. Do NOT rephrase, summarize, or add content
+
+Example: 我今天去了meeting然后discuss了一下project的timeline
+Output: 我今天去了meeting，然后discuss了一下project的timeline。"""
 
 
 class TextPolisher:
-    """LLM-based text post-processor using Qwen3-8B on MLX."""
+    """LLM-based text post-processor using Qwen3-8B on MLX (en_detailed prompt)."""
 
     def __init__(self):
         self._model = None
