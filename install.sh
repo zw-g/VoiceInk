@@ -77,6 +77,14 @@ else
         pyobjc-framework-Vision pyobjc-framework-Quartz pyobjc-framework-Cocoa 2>&1 | tail -5
 fi
 
+# Pre-download ML models (cached in ~/.cache/huggingface/hub/)
+echo "Downloading ML models (this may take a few minutes on first install)..."
+echo "  Downloading ASR model (Qwen3-ASR-1.7B, ~3.4 GB)..."
+"$VENV/bin/python" -c "from huggingface_hub import snapshot_download; snapshot_download('Qwen/Qwen3-ASR-1.7B')" 2>&1 | tail -2
+echo "  Downloading text polish model (Qwen3-1.7B-MLX-4bit, ~900 MB)..."
+"$VENV/bin/python" -c "from huggingface_hub import snapshot_download; snapshot_download('Qwen/Qwen3-1.7B-MLX-4bit')" 2>&1 | tail -2
+echo "Models ready."
+
 # [AUDIT-8] Compile Swift NER tools with error checking
 echo "Compiling NER tools..."
 if ! swiftc -O -o "$INSTALL_DIR/ner_tool" "$INSTALL_DIR/ner_tool.swift"; then
