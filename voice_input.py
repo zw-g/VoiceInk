@@ -250,15 +250,17 @@ def normalize_numbers(text):
 _LLM_MODEL_ID = "Qwen/Qwen3-8B-MLX-4bit"
 
 _LLM_SYSTEM_PROMPT = """\
-你是语音转文字的后处理工具。只输出处理后的文本，不要解释。
+你是语音转文字的后处理工具。只输出处理后的文本，不要任何解释。
 
 规则：
-1. 去掉语气词（呃、嗯、那个、就是说、然后呢）
-2. 口语符号转符号（大于→>，小于→<，等于→=，加→+，减→-，乘以→×）
-3. 轻微整理，保持通顺
-4. 不要改变原意、语气和人称
-5. 不要修改数字、已有符号和专有名词
-6. 不要把问句改成陈述句"""
+1. 口语数字转阿拉伯数字（百分之三十二→32%，三百七十六→376，零点五→0.5）
+2. 日期时间转数字（二零二六年→2026年，两点三十分→2:30，三个小时→3小时）
+3. 数学表达式转符号（加→+，减→-，乘以→×，除以→÷，等于→=，大于→>，小于→<，大于等于→≥，小于等于→≤，不等于→≠，的平方→²，根号→√）
+4. 去掉语气词废话（呃、嗯、那个、就是说、然后呢）
+5. 成语中的数字不转换（三心二意、七上八下、不管三七二十一等保持原样）
+6. 常用词中的数字不转换（一些、一下子、一直、一个等保持原样）
+7. 保留原意、语气、人称，不把问句改成陈述句
+8. 轻微整理标点，保持通顺"""
 
 
 class TextPolisher:
@@ -640,6 +642,7 @@ class VoiceInputApp(rumps.App):
         self._keyboard_listener = None
         self._ner_lock = threading.Lock()
         self._last_key_event_time = 0.0
+        self._last_audio_cb_time = 0.0
         threading.Thread(target=self._setup, daemon=True).start()
 
     def _ensure_image_view(self):
@@ -811,12 +814,13 @@ class VoiceInputApp(rumps.App):
                 threading.Thread(target=self._timer_auto_stop, daemon=True).start()
 
         # Watchdog: detect stuck RECORDING_HOLD (keyboard listener may have died).
-        # Push-to-talk recordings rarely exceed 30s. If we're stuck longer,
-        # the CGEvent tap was likely disabled by macOS.
+        # Only trigger if audio has ALSO stopped flowing — this distinguishes
+        # "listener died" from "user is legitimately recording for a long time".
         if self.state == State.RECORDING_HOLD and self._rec_start_time:
             hold_time = time.time() - self._rec_start_time
-            if hold_time > 60:
-                log.warning("Watchdog: RECORDING_HOLD stuck for %.0fs, forcing cancel", hold_time)
+            audio_alive = (time.monotonic() - self._last_audio_cb_time) < 5.0
+            if hold_time > 60 and not audio_alive:
+                log.warning("Watchdog: RECORDING_HOLD for %.0fs with no audio, listener likely dead", hold_time)
                 threading.Thread(target=self._watchdog_cancel, daemon=True).start()
 
         # Mic hot-plug: check device list change
@@ -1335,6 +1339,7 @@ class VoiceInputApp(rumps.App):
     def _audio_cb(self, indata, frames, time_info, status):
         if status:
             log.warning("Audio callback status: %s", status)
+        self._last_audio_cb_time = time.monotonic()
         self.audio_frames.append(indata.copy())
 
         # [AUDIT-20] VAD auto-stop in toggle mode (guarded to prevent thread storm)
@@ -1566,17 +1571,14 @@ class VoiceInputApp(rumps.App):
                 play_sound("Funk")  # [P4-2]
                 return
 
-            # Post-processing pipeline: ITN → LLM polish
-            raw_asr = text
-            text = normalize_numbers(text)
+            # Post-processing: LLM text polish (handles numbers, fillers, symbols)
             if self._text_polish:
-                itn_text = text
+                raw_asr = text
                 with Timer("Text polish"):
                     text = self._polisher.polish(text)
-                if text != itn_text:
-                    log.info("ASR raw:   %s", raw_asr)
-                    log.info("After ITN: %s", itn_text)
-                    log.info("After LLM: %s", text)
+                if text != raw_asr:
+                    log.info("ASR raw: %s", raw_asr)
+                    log.info("Polished: %s", text)
                 else:
                     log.info("Result: %s", text)
             else:
