@@ -70,6 +70,10 @@ _log_handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(message
 log = logging.getLogger("voiceinput")
 log.addHandler(_log_handler)
 log.setLevel(logging.INFO)
+try:
+    os.chmod(str(LOG_PATH), 0o600)
+except OSError:
+    pass
 
 
 # ── State ─────────────────────────────────────────────────────────
@@ -432,6 +436,7 @@ def save_settings(settings):
                 json.dump(settings, f, indent=2, ensure_ascii=False)
                 f.write('\n')
             os.replace(tmp_path, str(SETTINGS_PATH))
+            os.chmod(str(SETTINGS_PATH), 0o600)
         except Exception:
             os.unlink(tmp_path)
             raise
@@ -453,6 +458,7 @@ def load_dictionary(path):
             json.dump(DEFAULT_DICT, f, indent=2, ensure_ascii=False)
             f.write('\n')
         os.replace(tmp_path, str(path))
+        os.chmod(str(path), 0o600)
     except Exception:
         try:
             os.unlink(tmp_path)
@@ -2026,7 +2032,6 @@ class VoiceInputApp(rumps.App):
     def _dc_timeout(self):
         with self.lock:
             if self.state == State.WAITING_DOUBLE_CLICK:
-                self.state = State.IDLE
                 # [P1-2] Crash protection
                 try:
                     self._stop_rec_and_transcribe()
@@ -2068,8 +2073,6 @@ class VoiceInputApp(rumps.App):
                     self.status_item.title = "Toggle recording…"
                     log.info("Toggle mode")
                 elif self.state == State.RECORDING_TOGGLE:
-                    self.state = State.IDLE
-                    self.status_item.title = "Ready"
                     self._stop_rec_and_transcribe()
             except Exception as e:
                 log.error("Key press handler failed: %s", e, exc_info=True)
@@ -2090,7 +2093,6 @@ class VoiceInputApp(rumps.App):
                         )
                         self.dc_timer.start()
                     else:
-                        self.state = State.IDLE
                         self._stop_rec_and_transcribe()
             except Exception as e:
                 log.error("Key release handler failed: %s", e, exc_info=True)
