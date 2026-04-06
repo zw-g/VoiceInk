@@ -340,6 +340,7 @@ class TextPolisher:
         self._tokenizer = None
         self._sampler = None
         self._loaded = False
+        self._load_failed = False
 
     def load(self):
         """Load the LLM model. Call from background thread."""
@@ -355,6 +356,8 @@ class TextPolisher:
         except Exception as e:
             log.warning("Text polish model failed to load: %s", e, exc_info=True)
             self._loaded = False
+            self._load_failed = True
+            notify("VoiceInk", "Text polish model failed to load")
 
     def polish(self, text):
         """Polish text using the LLM. Returns original text on failure."""
@@ -891,6 +894,11 @@ class VoiceInputApp(rumps.App):
         if pending is not None:
             self.status_item.title = pending
             self._pending_status_title = None
+
+        # [FIX-15] Update polish menu item when model fails to load
+        if self._polisher._load_failed and getattr(self.polish_item, "state", False):
+            self.polish_item.title = "Text Polish (AI) \u2014 unavailable"
+            self.polish_item.state = False
 
         # Hide Dock icon (one-shot, must run on main thread)
         if not self._dock_hidden:
@@ -1751,8 +1759,20 @@ class VoiceInputApp(rumps.App):
                 # Quality gate — reject garbage from OCR
                 if len(key) < 2 or len(key) > 25:
                     continue
-                if len(key) > 6 and sum(1 for c in key if c.isdigit()) > len(key) * 0.3:
-                    continue
+                # Reject terms with high digit ratio
+                digit_count = sum(1 for c in key if c.isdigit())
+                if digit_count > 0 and len(key) > 1:
+                    digit_ratio = digit_count / len(key)
+                    if digit_ratio > 0.3:
+                        continue
+                    # For short terms: reject embedded digits (letter-digit-letter = OCR artifact)
+                    if len(key) <= 6 and digit_count > 0:
+                        for j in range(1, len(key) - 1):
+                            if key[j].isdigit() and key[j-1].isalpha() and key[j+1].isalpha():
+                                digit_count = -1  # flag for rejection
+                                break
+                        if digit_count == -1:
+                            continue
                 # Reject terms starting with digits, punctuation, or special chars
                 if not key[0].isalpha():
                     continue
