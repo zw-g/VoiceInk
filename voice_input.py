@@ -331,6 +331,13 @@ def _needs_polish(text):
     Returns False for short, clean text that would come back identical
     from the LLM, saving 0.8-2.6s of latency.
     """
+    # Unconverted math expressions (Chinese) — check before length gate
+    # so short expressions like "大于" still get polished
+    if re.search(r'大于|小于|等于|乘以|除以|大于等于|小于等于|不等于', text):
+        return True
+    # Unconverted math expressions (English)
+    if re.search(r'\b(greater than|less than|equals|squared|divided by)\b', text, re.IGNORECASE):
+        return True
     # Very short text — not worth the LLM overhead
     if len(text) < 8:
         return False
@@ -346,11 +353,8 @@ def _needs_polish(text):
     # Unconverted English number words
     if re.search(r'\b(thirty|forty|fifty|sixty|seventy|eighty|ninety|hundred|thousand|million|billion)\b', text, re.IGNORECASE):
         return True
-    # Unconverted math expressions (Chinese)
-    if re.search(r'大于|小于|等于|乘以|除以|大于等于|小于等于|不等于', text):
-        return True
-    # Unconverted math expressions (English)
-    if re.search(r'\b(greater than|less than|equals|squared|divided by)\b', text, re.IGNORECASE):
+    # Long text with no punctuation — likely needs punctuation from LLM
+    if len(text) > 30 and not re.search(r'[.,!?;:，。！？；：]', text):
         return True
     # No obvious issues found — skip polish
     return False
@@ -1342,7 +1346,7 @@ class VoiceInputApp(rumps.App):
         with self.lock:
             if self.state in (State.RECORDING_HOLD, State.RECORDING_TOGGLE):
                 log.warning("Watchdog: force-stopping stuck recording, transcribing audio")
-                notify("VoiceInk", "Key release missed — transcribing anyway")
+                notify("VoiceInk", "Recording auto-stopped — transcribing")
                 self._stop_rec_and_transcribe()
         # Force listener restart so the auto-restart loop in _setup kicks in
         listener = self._keyboard_listener
@@ -1402,7 +1406,9 @@ class VoiceInputApp(rumps.App):
             notify("VoiceInk", f"Updated to v{local_ver} — ready")
             log.info("Post-restart: running updated code v%s", local_ver)
         else:
-            notify("VoiceInk", "Ready — use right Option key")
+            hotkey_name = self._settings.get("hotkey", DEFAULT_HOTKEY)
+            hotkey_label = self._HOTKEY_LABELS.get(hotkey_name, hotkey_name)
+            notify("VoiceInk", f"Ready — use {hotkey_label} key")
 
         # [P1-1] Keyboard listener auto-restart loop
         restart_delay = 3
@@ -1422,7 +1428,7 @@ class VoiceInputApp(rumps.App):
                     restart_delay = 3
             except Exception as e:
                 log.error("Keyboard listener died: %s", e, exc_info=True)
-            notify("VoiceInk", f"Keyboard listener lost — restarting in {restart_delay}s")
+            notify("VoiceInk", "Reconnecting hotkey listener...")
             self.status_item.title = "Listener error"
             self.state = State.ERROR
             time.sleep(restart_delay)
@@ -1596,6 +1602,8 @@ class VoiceInputApp(rumps.App):
         self._settings["text_polish"] = self._text_polish
         self._save_settings()
         log.info("Text Polish: %s", "enabled" if self._text_polish else "disabled")
+        if self._text_polish and not self._polisher._loaded:
+            threading.Thread(target=self._polisher.load, daemon=True).start()
 
     # ── Permission checks [P4-1] ─────────────────────────────
 
