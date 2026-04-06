@@ -1551,6 +1551,8 @@ class VoiceInputApp(rumps.App):
             play_sound("Funk")  # [P4-2] no-speech feedback
             return
 
+        self._pending_status_title = "Transcribing..."
+
         rms = float(np.sqrt(np.mean(audio ** 2)))
         peak = float(np.max(np.abs(audio)))
         log.info("Audio level: RMS=%.4f peak=%.4f (%.1fs)", rms, peak, duration)
@@ -1572,6 +1574,7 @@ class VoiceInputApp(rumps.App):
                 return
 
             # Post-processing: LLM text polish (handles numbers, fillers, symbols)
+            self._pending_status_title = "Polishing..."
             if self._text_polish:
                 raw_asr = text
                 with Timer("Text polish"):
