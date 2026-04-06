@@ -983,7 +983,9 @@ class VoiceInputApp(rumps.App):
                     pass
                 try:
                     current_devs = self._get_input_devices()
-                    if current_devs != self._last_device_list:
+                    current_names = [name for _, name in current_devs]
+                    last_names = [name for _, name in self._last_device_list]
+                    if current_names != last_names:
                         self._last_device_list = current_devs
                         self._resolve_mic()
                         self._mic_menu_dirty = True
@@ -1118,6 +1120,7 @@ class VoiceInputApp(rumps.App):
     def _check_for_update(self):
         """Check GitHub for new commits. Returns True if update available."""
         try:
+            import urllib.error
             import urllib.request
 
             url = f"https://api.github.com/repos/{self._REPO}/commits/main"
@@ -1149,6 +1152,12 @@ class VoiceInputApp(rumps.App):
                 log.info("Update available: %s -> %s", local_sha[:8], remote_sha[:8])
                 return True
             log.info("VoiceInk is up to date (%s)", local_sha[:8])
+            return False
+        except urllib.error.HTTPError as e:
+            if e.code == 403:
+                log.info("GitHub API rate limited, will retry next cycle")
+            else:
+                log.warning("Update check failed: HTTP %d", e.code, exc_info=True)
             return False
         except Exception as e:
             log.warning("Update check failed: %s", e, exc_info=True)
@@ -1288,7 +1297,6 @@ class VoiceInputApp(rumps.App):
         self._settings["text_polish"] = self._text_polish
         self._save_settings()
         log.info("Text Polish: %s", "enabled" if self._text_polish else "disabled")
-        log.info("Auto-update: %s", "enabled" if self._auto_update else "disabled")
 
     # ── Permission checks [P4-1] ─────────────────────────────
 
@@ -1555,18 +1563,20 @@ class VoiceInputApp(rumps.App):
         log.info("System did wake")
 
         def _wake_recovery():
-            time.sleep(2)  # Wait for hardware re-enumeration
             try:
-                if self.stream is None:
-                    sd._terminate()
-                    sd._initialize()
-                    log.info("Wake: PortAudio reinitialized")
-            except Exception as e:
-                log.warning("Wake: PortAudio reinit failed: %s", e, exc_info=True)
-            self._resolve_mic()
-            self._sleeping = False
-            self._pending_status_title = "Ready"
-            log.info("Wake: recovery complete")
+                time.sleep(2)  # Wait for hardware re-enumeration
+                try:
+                    if self.stream is None:
+                        sd._terminate()
+                        sd._initialize()
+                        log.info("Wake: PortAudio reinitialized")
+                except Exception as e:
+                    log.warning("Wake: PortAudio reinit failed: %s", e, exc_info=True)
+                self._resolve_mic()
+            finally:
+                self._sleeping = False
+                self._pending_status_title = "Ready"
+                log.info("Wake: recovery complete")
 
         threading.Thread(target=_wake_recovery, daemon=True).start()
 
@@ -1839,6 +1849,10 @@ class VoiceInputApp(rumps.App):
                 # Reject terms with non-alphanumeric chars (OCR artifacts)
                 if any(not (c.isalpha() or c.isdigit() or c in " -'") for c in key):
                     continue
+                # Strip trailing punctuation from OCR artifacts
+                key = key.rstrip('.,;:!?。，；：！？')
+                if len(key) < 2:
+                    continue
                 if key not in terms:
                     terms[key] = w
 
@@ -1996,9 +2010,6 @@ class VoiceInputApp(rumps.App):
         i = 0
         while i < len(text):
             chunk = text[i : i + MAX_CHUNK]
-            # Don't split surrogate pairs (emoji, rare CJK)
-            if chunk and ord(chunk[-1]) >= 0xD800 and ord(chunk[-1]) <= 0xDBFF:
-                chunk = text[i : i + MAX_CHUNK - 1]
             i += len(chunk)
             for key_down in (True, False):
                 ev = CGEventCreateKeyboardEvent(None, 0, key_down)
