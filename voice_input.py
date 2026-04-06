@@ -1036,6 +1036,7 @@ class VoiceInputApp(rumps.App):
         notify("VoiceInk", "Ready — use right Option key")
 
         # [P1-1] Keyboard listener auto-restart loop
+        restart_delay = 3
         while True:
             try:
                 log.info("Starting keyboard listener")
@@ -1043,15 +1044,21 @@ class VoiceInputApp(rumps.App):
                     on_press=self._on_press, on_release=self._on_release
                 ) as listener:
                     self._keyboard_listener = listener
+                    start_time = time.monotonic()
                     listener.join()
                 self._keyboard_listener = None
                 log.warning("Keyboard listener exited")
+                # Reset backoff if listener ran for at least 60s (was stable)
+                if time.monotonic() - start_time > 60:
+                    restart_delay = 3
             except Exception as e:
                 log.error("Keyboard listener died: %s", e, exc_info=True)
-            notify("VoiceInk", "Keyboard listener lost — restarting in 3s")
+            notify("VoiceInk", f"Keyboard listener lost — restarting in {restart_delay}s")
             self.status_item.title = "Listener error"
-            self.state = State.ERROR  # [AUDIT-13]
-            time.sleep(3)
+            self.state = State.ERROR
+            time.sleep(restart_delay)
+            # Exponential backoff: 3, 6, 12, 24, 48, 96, 192, max 300
+            restart_delay = min(restart_delay * 2, 300)
             self.state = State.IDLE
             self.status_item.title = "Ready"
 
