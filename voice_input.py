@@ -1021,6 +1021,19 @@ class VoiceInputApp(rumps.App):
                     extracted = [d for d in os.listdir(tmp_dir)
                                  if os.path.isdir(os.path.join(tmp_dir, d))]
                     if extracted:
+                        # Verify tarball integrity via commit SHA
+                        # GitHub tarball dirs are named "owner-repo-shortsha/"
+                        try:
+                            sha_url = f"https://api.github.com/repos/{self._REPO}/commits/main"
+                            with urllib.request.urlopen(sha_url, timeout=5) as resp:
+                                expected_sha = json.loads(resp.read().decode())["sha"][:7]
+                            if not extracted[0].endswith(expected_sha):
+                                log.warning("Update integrity check failed: expected SHA %s, got dir %s",
+                                            expected_sha, extracted[0])
+                                return False
+                            log.info("Update integrity verified (SHA: %s)", expected_sha)
+                        except Exception as e:
+                            log.warning("Could not verify update integrity: %s (proceeding anyway)", e)
                         src_dir = os.path.join(tmp_dir, extracted[0])
                         for f in ["voice_input.py", "itn.py", "text_polisher.py",
                                   "dictionary_ui.py", "test_voice_input.py",
