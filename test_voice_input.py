@@ -18,14 +18,15 @@ import os
 import tempfile
 import unittest
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import patch, MagicMock
 
 # We import only the pure functions — avoid triggering rumps/sounddevice/pynput
 # at module level by patching them before importing voice_input.
 import sys
 _stubs = {}
 for mod_name in ("rumps", "sounddevice", "pynput", "pynput.keyboard",
-                 "Quartz", "Vision", "AppKit", "numpy"):
+                 "Quartz", "Vision", "AppKit", "numpy", "mlx_lm",
+                 "mlx_lm.sample_utils"):
     if mod_name not in sys.modules:
         from unittest.mock import MagicMock
         _stubs[mod_name] = MagicMock()
@@ -38,12 +39,14 @@ from voice_input import (
     _en_itn,
     normalize_numbers,
     _needs_polish,
+    _is_valid_context_term,
     DictionaryGuard,
     load_dictionary,
     save_settings,
     DEFAULT_DICT,
     SETTINGS_PATH,
 )
+from text_polisher import TextPolisher
 
 
 # ── _en_itn tests ───────────────────────────────────────────────────
@@ -322,5 +325,112 @@ class TestSaveSettings(unittest.TestCase):
             self.assertEqual(data["name"], "测试中文")
 
 
+# ── TextPolisher.polish() safety tests ──────────────────────────────
+
+
+class TestTextPolisherSafety(unittest.TestCase):
+    """Test TextPolisher.polish() safety checks with mocked LLM."""
+
+    def setUp(self):
+        self.polisher = TextPolisher()
+        self.polisher._loaded = True
+        self.polisher._model = MagicMock()
+        self.polisher._tokenizer = MagicMock()
+        self.polisher._tokenizer.apply_chat_template.return_value = "test_prompt"
+        self.polisher._sampler = MagicMock()
+
+    @patch('mlx_lm.generate')
+    def test_empty_output_returns_original(self, mock_gen):
+        mock_gen.return_value = ""
+        result = self.polisher.polish("hello world")
+        self.assertEqual(result, "hello world")
+
+    @patch('mlx_lm.generate')
+    def test_thinking_block_stripped(self, mock_gen):
+        mock_gen.return_value = "<think>reasoning here</think>Hello world"
+        result = self.polisher.polish("hello world")
+        self.assertEqual(result, "Hello world")
+
+    @patch('mlx_lm.generate')
+    def test_unclosed_think_stripped(self, mock_gen):
+        mock_gen.return_value = "<think>reasoning without close tag Hello world"
+        result = self.polisher.polish("hello world")
+        # Should strip everything from <think> onwards
+        self.assertEqual(result, "hello world")  # Falls back to original since clean is empty
+
+    @patch('mlx_lm.generate')
+    def test_too_short_output_returns_original(self, mock_gen):
+        mock_gen.return_value = "Hi"  # Way too short compared to input
+        result = self.polisher.polish("hello world this is a longer sentence")
+        self.assertEqual(result, "hello world this is a longer sentence")
+
+    @patch('mlx_lm.generate')
+    def test_too_long_output_returns_original(self, mock_gen):
+        mock_gen.return_value = "hello world " * 50  # Way too long
+        result = self.polisher.polish("hello world")
+        self.assertEqual(result, "hello world")
+
+    @patch('mlx_lm.generate')
+    def test_normal_output_returned(self, mock_gen):
+        mock_gen.return_value = "Hello, world!"
+        result = self.polisher.polish("hello world")
+        self.assertEqual(result, "Hello, world!")
+
+
+# ── _is_valid_context_term tests ────────────────────────────────────
+
+
+class TestContextTermFilter(unittest.TestCase):
+    """Test quality filtering for ASR context terms."""
+
+    def test_valid_short_term(self):
+        self.assertTrue(_is_valid_context_term("MLX"))
+
+    def test_valid_normal_term(self):
+        self.assertTrue(_is_valid_context_term("PyTorch"))
+
+    def test_valid_hyphenated(self):
+        self.assertTrue(_is_valid_context_term("well-known"))
+
+    def test_valid_with_apostrophe(self):
+        self.assertTrue(_is_valid_context_term("it's"))
+
+    def test_reject_too_long(self):
+        self.assertFalse(_is_valid_context_term("a" * 26))
+
+    def test_reject_too_short(self):
+        self.assertFalse(_is_valid_context_term("x"))
+
+    def test_reject_empty(self):
+        self.assertFalse(_is_valid_context_term(""))
+
+    def test_reject_high_digit_ratio(self):
+        self.assertFalse(_is_valid_context_term("a123456"))
+
+    def test_reject_embedded_digit(self):
+        # Short term with letter-digit-letter pattern (OCR artifact)
+        self.assertFalse(_is_valid_context_term("a1b"))
+
+    def test_reject_leading_digit(self):
+        self.assertFalse(_is_valid_context_term("1abc"))
+
+    def test_reject_leading_punctuation(self):
+        self.assertFalse(_is_valid_context_term(".hello"))
+
+    def test_reject_non_alphanum_chars(self):
+        self.assertFalse(_is_valid_context_term("hello@world"))
+
+    def test_valid_cjk_term(self):
+        # CJK characters are alpha per Python's isalpha()
+        self.assertTrue(_is_valid_context_term("\u4f60\u597d"))
+
+    def test_accept_term_at_max_length(self):
+        self.assertTrue(_is_valid_context_term("a" * 25))
+
+    def test_accept_term_at_min_length(self):
+        self.assertTrue(_is_valid_context_term("ab"))
+
+
 if __name__ == "__main__":
     unittest.main()
+

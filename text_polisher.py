@@ -84,7 +84,7 @@ def _needs_polish(text):
     """
     # Unconverted math expressions (Chinese) — check before length gate
     # so short expressions like "大于" still get polished
-    if re.search(r'大于|小于|等于|乘以|除以|大于等于|小于等于|不等于', text):
+    if re.search(r'大于等于|小于等于|不等于|大于|小于|等于|乘以|除以', text):
         return True
     # Unconverted math expressions (English)
     if re.search(r'\b(greater than|less than|equals|squared|divided by)\b', text, re.IGNORECASE):

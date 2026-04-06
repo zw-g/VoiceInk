@@ -413,6 +413,42 @@ def get_screen_text():
 from dictionary_ui import DictionaryGuard, DictionaryPopup  # noqa: E402
 
 
+def _is_valid_context_term(term):
+    """Check if a term is valid for ASR context. Filters OCR garbage.
+
+    Returns True if the term passes all quality filters:
+      - Length between 2 and 25 chars
+      - Not too many digits (>30% ratio)
+      - No embedded digits in short terms (letter-digit-letter = OCR artifact)
+      - Starts with an alphabetic character (including CJK)
+      - No non-alphanumeric characters except space, hyphen, apostrophe
+    """
+    key = term.lower()
+    # Length gate
+    if len(key) < 2 or len(key) > 25:
+        return False
+    # Reject terms with high digit ratio
+    digit_count = sum(1 for c in key if c.isdigit())
+    if digit_count > 0 and len(key) > 1:
+        digit_ratio = digit_count / len(key)
+        if digit_ratio > 0.3:
+            return False
+        # For short terms: reject embedded digits (letter-digit-letter = OCR artifact)
+        if len(key) <= 6 and digit_count > 0:
+            for j in range(1, len(key) - 1):
+                if key[j].isdigit() and key[j-1].isalpha() and key[j+1].isalpha():
+                    return False
+    # Reject terms starting with digits, punctuation, or special chars
+    # (but allow CJK characters which are not ASCII alpha)
+    first = key[0]
+    if not first.isalpha():
+        return False
+    # Reject terms with non-alphanumeric chars (OCR artifacts)
+    if any(not (c.isalpha() or c.isdigit() or c in " -'") for c in key):
+        return False
+    return True
+
+
 # ── App ───────────────────────────────────────────────────────────
 
 
@@ -1047,6 +1083,11 @@ class VoiceInputApp(rumps.App):
                                 tmp = dst + ".tmp"
                                 shutil.copy2(src, tmp)
                                 os.replace(tmp, dst)
+                        # Ensure shell scripts are executable after tarball extraction
+                        for sh in ["start.sh", "stop.sh", "uninstall.sh"]:
+                            sh_path = str(self._INSTALL_DIR / sh)
+                            if os.path.exists(sh_path):
+                                os.chmod(sh_path, 0o755)
                     else:
                         log.warning("Tarball had no subdirectory")
                         return False
@@ -1737,28 +1778,7 @@ class VoiceInputApp(rumps.App):
                 if len(terms) >= self._MAX_CONTEXT_TERMS:
                     break
                 key = w.lower()
-                # Quality gate — reject garbage from OCR
-                if len(key) < 2 or len(key) > 25:
-                    continue
-                # Reject terms with high digit ratio
-                digit_count = sum(1 for c in key if c.isdigit())
-                if digit_count > 0 and len(key) > 1:
-                    digit_ratio = digit_count / len(key)
-                    if digit_ratio > 0.3:
-                        continue
-                    # For short terms: reject embedded digits (letter-digit-letter = OCR artifact)
-                    if len(key) <= 6 and digit_count > 0:
-                        for j in range(1, len(key) - 1):
-                            if key[j].isdigit() and key[j-1].isalpha() and key[j+1].isalpha():
-                                digit_count = -1  # flag for rejection
-                                break
-                        if digit_count == -1:
-                            continue
-                # Reject terms starting with digits, punctuation, or special chars
-                if not key[0].isalpha():
-                    continue
-                # Reject terms with non-alphanumeric chars (OCR artifacts)
-                if any(not (c.isalpha() or c.isdigit() or c in " -'") for c in key):
+                if not _is_valid_context_term(key):
                     continue
                 # Strip trailing punctuation from OCR artifacts
                 key = key.rstrip('.,;:!?。，；：！？')
