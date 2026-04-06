@@ -1145,9 +1145,14 @@ class VoiceInputApp(rumps.App):
             local_version_file = self._INSTALL_DIR / "VERSION"
             local_version = local_version_file.read_text().strip() if local_version_file.exists() else "0.0.0"
 
-            # Simple string comparison — works for semver as long as
-            # versions are bumped correctly (1.0.0 < 1.0.1 < 1.1.0)
-            if remote_version != local_version:
+            # Compare as semver tuples to handle downgrades and garbage correctly
+            try:
+                remote_parts = tuple(int(x) for x in remote_version.split('.'))
+                local_parts = tuple(int(x) for x in local_version.split('.'))
+            except (ValueError, AttributeError):
+                log.warning("Invalid version format: remote=%s local=%s", remote_version, local_version)
+                return False
+            if remote_parts > local_parts:
                 log.info("Update available: %s -> %s", local_version, remote_version)
                 return True
             log.info("VoiceInk is up to date (v%s)", local_version)
@@ -1554,7 +1559,9 @@ class VoiceInputApp(rumps.App):
 
         try:
             max_fd = os.sysconf("SC_OPEN_MAX")
-        except (ValueError, OSError):
+            if max_fd > 65536:  # macOS returns INT64_MAX; cap to avoid OverflowError
+                max_fd = 65536
+        except (ValueError, OSError, OverflowError):
             max_fd = 1024
         os.closerange(3, max_fd)
 
