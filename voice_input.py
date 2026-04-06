@@ -1163,27 +1163,27 @@ class VoiceInputApp(rumps.App):
                     return False
             log.info("NER tools recompiled")
 
-            # [BUG-10] Clean up before restart
-            if hasattr(self, "_ner_proc") and self._ner_proc:
-                try:
-                    self._ner_proc.stdin.close()
-                    self._ner_proc.terminate()
-                except Exception:
-                    pass
-            if self.stream:
-                try:
-                    self.stream.stop()
-                    self.stream.close()
-                except Exception:
-                    pass
+            # Comprehensive resource cleanup before execv
+            self._cleanup_resources()
 
             log.info("Restarting VoiceInk...")
             notify("VoiceInk", "Updated! Restarting...")
-
-            # Flush logs before execv (which replaces process without cleanup)
-            for handler in log.handlers:
-                handler.flush()
             time.sleep(1)
+
+            # Close all log handlers
+            for handler in list(log.handlers):
+                try:
+                    handler.flush()
+                    handler.close()
+                except Exception:
+                    pass
+
+            # Close ALL file descriptors >= 3 to prevent leaks into new process
+            try:
+                max_fd = os.sysconf("SC_OPEN_MAX")
+            except (ValueError, OSError):
+                max_fd = 1024
+            os.closerange(3, max_fd)
 
             import sys
             python = sys.executable
@@ -1402,14 +1402,26 @@ class VoiceInputApp(rumps.App):
         n = len(self.dictionary.get("vocabulary", []))
         notify("VoiceInk", f"Dictionary reloaded ({n} entries)")
 
-    # [P1-5] Graceful shutdown
-    def _quit(self, _):
-        log.info("Shutting down")
-        if self._wake_observer:
+    def _cleanup_resources(self):
+        """Release all resources for restart or shutdown."""
+        self._cancel_timer()
+
+        if self._keyboard_listener:
             try:
-                NSWorkspace.sharedWorkspace().notificationCenter().removeObserver_(self._wake_observer)
+                self._keyboard_listener.stop()
             except Exception:
                 pass
+            self._keyboard_listener = None
+
+        if self._wake_observer:
+            try:
+                NSWorkspace.sharedWorkspace().notificationCenter().removeObserver_(
+                    self._wake_observer
+                )
+            except Exception:
+                pass
+            self._wake_observer = None
+
         if self.stream:
             try:
                 self.stream.stop()
@@ -1417,15 +1429,49 @@ class VoiceInputApp(rumps.App):
             except Exception:
                 pass
             self.stream = None
-        # Kill NER daemon
+
         if hasattr(self, "_ner_proc") and self._ner_proc:
             try:
                 self._ner_proc.stdin.close()
-                self._ner_proc.terminate()
             except Exception:
                 pass
+            try:
+                self._ner_proc.stdout.close()
+            except Exception:
+                pass
+            try:
+                self._ner_proc.terminate()
+                self._ner_proc.wait(timeout=2)
+            except subprocess.TimeoutExpired:
+                try:
+                    self._ner_proc.kill()
+                    self._ner_proc.wait(timeout=1)
+                except Exception:
+                    pass
+            except Exception:
+                pass
+            self._ner_proc = None
+
+        if hasattr(self, "_activity") and self._activity:
+            try:
+                from Foundation import NSProcessInfo
+                NSProcessInfo.processInfo().endActivity_(self._activity)
+            except Exception:
+                pass
+            self._activity = None
+
+        for handler in log.handlers:
+            try:
+                handler.flush()
+            except Exception:
+                pass
+
         self.state = State.IDLE
-        self._cancel_timer()
+
+    # [P1-5] Graceful shutdown
+    def _quit(self, _):
+        log.info("Shutting down")
+        self._cleanup_resources()
         rumps.quit_application()
 
     # ── Sleep/Wake handling ───────────────────────────────────
