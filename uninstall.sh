@@ -15,7 +15,7 @@ rm -f ~/Library/LaunchAgents/com.local.voiceinput.plist
 
 # Remove app bundle
 echo "Removing VoiceInk.app..."
-rm -rf /Applications/VoiceInk.app 2>/dev/null || true
+sudo rm -rf /Applications/VoiceInk.app 2>/dev/null || true
 
 # Ask about data
 echo ""

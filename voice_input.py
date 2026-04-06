@@ -104,6 +104,24 @@ _threading.excepthook = _thread_excepthook
 
 
 class State(enum.Enum):
+    """Application state machine.
+
+    State transition table:
+        LOADING              -> IDLE                 (models loaded)
+        IDLE                 -> RECORDING_HOLD       (hotkey pressed)
+        IDLE                 -> WAITING_DOUBLE_CLICK  (hotkey released quickly)
+        RECORDING_HOLD       -> PROCESSING           (hotkey released)
+        RECORDING_HOLD       -> IDLE                 (escape pressed / cancel)
+        WAITING_DOUBLE_CLICK -> RECORDING_TOGGLE     (hotkey pressed within window)
+        WAITING_DOUBLE_CLICK -> PROCESSING           (timeout, short audio recorded)
+        WAITING_DOUBLE_CLICK -> IDLE                 (timeout, no audio)
+        RECORDING_TOGGLE     -> PROCESSING           (hotkey pressed to stop)
+        RECORDING_TOGGLE     -> IDLE                 (escape pressed / cancel)
+        PROCESSING           -> IDLE                 (transcription complete)
+        PROCESSING           -> ERROR                (transcription failed)
+        ERROR                -> IDLE                 (after timeout / recovery)
+    """
+
     LOADING = "loading"
     IDLE = "idle"
     RECORDING_HOLD = "recording_hold"
@@ -280,12 +298,18 @@ Rules:
 2. Convert math/symbols in ALL languages:
    - Chinese: 大于→>, 小于→<, 等于→=, 加→+, 减→-, 乘以→×, 除以→÷, 大于等于→≥, 小于等于→≤, 不等于→≠, 的平方→², 根号→√
    - English: is greater than→>, is less than→<, equals→=, plus→+, minus→-, times→×, divided by→÷, is greater than or equal to→≥, squared→², square root→√, to the power of→superscript
-3. Remove filler words ONLY:
+3. Convert time expressions:
+   - Chinese: 下午两点半→下午2:30, 上午九点十五→上午9:15, 三点四十五→3:45
+   - English: three thirty pm→3:30 PM, ten fifteen am→10:15 AM, noon→12:00 PM
+4. Convert ordinals:
+   - Chinese: 第三→第3, 第二十一→第21, 第一百→第100
+   - English: first→1st, second→2nd, third→3rd, twenty-first→21st, forty-second→42nd
+5. Remove filler words ONLY:
    Chinese: 呃, 嗯, 那个, 就是说, 然后呢
    English: um, uh, like (as filler), you know (as filler), so basically
-4. Add punctuation
-5. Preserve idioms (三心二意, 不管三七二十一)
-6. Do NOT rephrase, reword, or modify meaningful content
+6. Add punctuation
+7. Preserve idioms (三心二意, 不管三七二十一)
+8. Do NOT rephrase, reword, or modify meaningful content
 
 Example 1: 呃就是说这个东西嗯还不错然后呢我们看看
 Output 1: 这个东西还不错，我们看看

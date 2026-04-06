@@ -141,6 +141,12 @@ Edit `~/.local/voice-input/dictionary.json`:
 ```
 Changes auto-reload within 1 second.
 
+VoiceInk automatically detects when you correct transcribed text. If the correction suggests a new term (brand names, technical terms, bilingual code-switching), a popup appears for 5 seconds to confirm the addition. Click the X button to cancel.
+
+### Restart to Update
+
+When auto-update downloads a new version in the background, a **Restart to Update** menu item appears in the menu bar. Click it to apply the update and restart VoiceInk.
+
 ## Permissions
 
 On first launch, VoiceInk will check for required permissions:
