@@ -4,35 +4,33 @@ set -euo pipefail
 echo "=== VoiceInk Uninstaller ==="
 echo ""
 
-# Stop the app
+# Stop the service
 echo "Stopping VoiceInk..."
-pkill -f voice_input.py 2>/dev/null || true
+launchctl bootout gui/$(id -u) ~/Library/LaunchAgents/com.local.voiceinput.plist 2>/dev/null || true
+sleep 1
 
-# Unload LaunchAgent
-PLIST="$HOME/Library/LaunchAgents/com.local.voiceinput.plist"
-if [[ -f "$PLIST" ]]; then
-    launchctl bootout "gui/$(id -u)" "$PLIST" 2>/dev/null || true
-    rm -f "$PLIST"
-    echo "  LaunchAgent removed"
-fi
+# Remove LaunchAgent
+echo "Removing LaunchAgent..."
+rm -f ~/Library/LaunchAgents/com.local.voiceinput.plist
 
-# Remove app from /Applications
-if [[ -d "/Applications/VoiceInk.app" ]]; then
-    sudo rm -rf /Applications/VoiceInk.app 2>/dev/null || rm -rf ~/Applications/VoiceInk.app 2>/dev/null || true
-    echo "  VoiceInk.app removed"
-fi
+# Remove app bundle
+echo "Removing VoiceInk.app..."
+rm -rf /Applications/VoiceInk.app 2>/dev/null || true
 
-# Remove install directory
-INSTALL_DIR="$HOME/.local/voice-input"
-if [[ -d "$INSTALL_DIR" ]]; then
-    read -p "Remove all VoiceInk data ($INSTALL_DIR)? This includes settings and history. [y/N] " confirm
-    if [[ "$confirm" =~ ^[Yy]$ ]]; then
-        rm -rf "$INSTALL_DIR"
-        echo "  Install directory removed"
-    else
-        echo "  Kept $INSTALL_DIR (settings and history preserved)"
-    fi
+# Ask about data
+echo ""
+read -p "Remove all data (settings, dictionary, logs)? [y/N] " -n 1 -r
+echo ""
+if [[ $REPLY =~ ^[Yy]$ ]]; then
+    echo "Removing ~/.local/voice-input/..."
+    rm -rf ~/.local/voice-input
+    echo "Removing cached ML models..."
+    rm -rf ~/.cache/huggingface/hub/models--Qwen--Qwen3-ASR-1.7B
+    rm -rf ~/.cache/huggingface/hub/models--Qwen--Qwen3-8B-MLX-4bit
+else
+    echo "Keeping data at ~/.local/voice-input/"
+    echo "To remove later: rm -rf ~/.local/voice-input"
 fi
 
 echo ""
-echo "=== VoiceInk Uninstalled ==="
+echo "=== VoiceInk uninstalled ==="
