@@ -1,9 +1,5 @@
 {
   "vocabulary": [
-    "Qwen",
-    "MLX",
-    "PyTorch",
-    "Sapling",
     "Phabricator",
     "fbsource",
     "fbcode",
@@ -12,14 +8,22 @@
     "Anthropic",
     "ClaudeCode",
     "CMUX",
-    "Meta",
-    "Facebook",
-    "Instagram",
-    "Show",
     "VoiceInk",
     "MetaMate",
     "IFR",
     "CFR",
-    "diff"
+    "diff",
+    "VPV",
+    "rVPV",
+    "gsheet",
+    "gdoc",
+    "Workstream",
+    "Feed",
+    "重启",
+    "Detail",
+    "RuoTai",
+    "Scuba",
+    "query",
+    "mean"
   ]
 }

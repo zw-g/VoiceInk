@@ -301,11 +301,17 @@ _DICT_CLASSIFY_PROMPT = (
     "user's correction, decide if the corrected word should be added to the "
     "speech recognition dictionary.\n"
     "Answer ONLY 'YES word' or 'NO'.\n\n"
-    "ADD (YES): proper nouns, brand names, technical terms, product names, "
-    "person names, Chinese proper nouns — words the ASR consistently gets wrong.\n"
-    "SKIP (NO): common words, typo/grammar fixes, punctuation changes, "
+    "ADD (YES):\n"
+    "- Proper nouns, brand names, technical terms, product names, person names\n"
+    "- Chinese proper nouns the ASR consistently gets wrong\n"
+    "- Bilingual code-switching: English words the ASR mistranscribes as Chinese "
+    "characters (e.g., user says 'mean' but ASR writes '命'). These MUST be added "
+    "because the ASR cannot distinguish them without dictionary hints.\n\n"
+    "SKIP (NO): typo/grammar fixes, punctuation changes, "
     "single characters, rephrasing, capitalization-only changes.\n\n"
-    "Be PICKY. When in doubt, answer NO.\n\n"
+    "Be PICKY for common words in monolingual context. But for cross-language "
+    "errors (Chinese char where English word was intended, or vice versa), "
+    "ALWAYS say YES — these are exactly what the dictionary is for.\n\n"
     "Examples:\n"
     '- ASR: "pie torch" -> User: "PyTorch" => YES PyTorch\n'
     '- ASR: "anthrobic" -> User: "Anthropic" => YES Anthropic\n'
@@ -313,6 +319,9 @@ _DICT_CLASSIFY_PROMPT = (
     '- ASR: "kuda" -> User: "CUDA" => YES CUDA\n'
     '- ASR: "he go" -> User: "he went" => NO\n'
     '- ASR: "法布里凯特" -> User: "Phabricator" => YES Phabricator\n'
+    '- ASR: "非常命的" -> User: "非常mean的" => YES mean\n'
+    '- ASR: "好的哈" -> User: "好的ha" => NO (common interjection)\n'
+    '- ASR: "我要看你" -> User: "我要看repo" => YES repo\n'
 )
 
 
