@@ -152,42 +152,6 @@ class Timer:
         log.info("%s completed in %.2fs", self.label, elapsed)
 
 
-# ── VAD (Voice Activity Detection) [AUDIT-20] ────────────────────
-
-
-class SimpleVAD:
-    """RMS energy-based voice activity detection for real-time auto-stop."""
-
-    def __init__(self, threshold=0.015, silence_limit=94, min_speech=3):
-        self.threshold = threshold
-        self.silence_limit = silence_limit  # ~3s at 32ms/frame
-        self.min_speech = min_speech
-        self.silence_count = 0
-        self.speech_count = 0
-        self.is_speaking = False
-
-    def process_frame(self, float32_frame):
-        """Process a single frame. Returns (is_speech, should_auto_stop)."""
-        rms = np.sqrt(np.mean(float32_frame ** 2))
-
-        if rms > self.threshold:
-            self.speech_count += 1
-            self.silence_count = 0
-            if self.speech_count >= self.min_speech:
-                self.is_speaking = True
-        else:
-            self.silence_count += 1
-            self.speech_count = 0
-
-        should_stop = self.is_speaking and self.silence_count >= self.silence_limit
-        return rms > self.threshold, should_stop
-
-    def reset(self):
-        self.silence_count = 0
-        self.speech_count = 0
-        self.is_speaking = False
-
-
 # ── Inverse Text Normalization (ITN) ──────────────────────────────
 
 # Chinese: fix cn2an false positives where 一 is a word, not the number 1
@@ -677,7 +641,6 @@ class VoiceInputApp(rumps.App):
         self.session = None
         self.kb = keyboard.Controller()
         self._rec_start_time = 0.0
-        self._vad = SimpleVAD()  # [AUDIT-20] Real-time VAD for auto-stop
         self._polisher = TextPolisher()
         self._text_polish = self._settings.get("text_polish", True)
         self._MAX_HISTORY = 30
@@ -1601,7 +1564,6 @@ class VoiceInputApp(rumps.App):
         self._resolve_mic()
         self.audio_frames = []
         self._rec_start_time = time.time()
-        self._vad.reset()
 
         # [P1-2] Crash protection for mic errors
         try:
