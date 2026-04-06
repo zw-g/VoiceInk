@@ -26,7 +26,7 @@
 - **Bilingual support** — speak Chinese, English, or mix both freely — your language choices are preserved exactly
 - **Native SF Symbol animations** — waveform icon with macOS-native effects
 - **Transcription history** — last 30 transcriptions saved, click to copy
-- **Auto-update** — checks GitHub for updates, one-click apply
+- **Auto-update** — checks GitHub for updates, one-click apply. Works with both git-clone and standalone installs.
 - **Privacy first** — everything runs locally. No data leaves your Mac.
 
 ## Requirements

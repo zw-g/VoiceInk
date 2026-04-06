@@ -1133,92 +1133,82 @@ class VoiceInputApp(rumps.App):
     _INSTALL_DIR = CONFIG_DIR
 
     def _check_for_update(self):
-        """Check GitHub for new commits. Returns True if update available."""
+        """Check GitHub for newer version via VERSION file comparison."""
         try:
-            import urllib.error
             import urllib.request
 
-            url = f"https://api.github.com/repos/{self._REPO}/commits/main"
-            req = urllib.request.Request(url, headers={"Accept": "application/vnd.github.v3+json"})
-            with urllib.request.urlopen(req, timeout=5) as resp:
-                data = json.loads(resp.read())
-            remote_sha = data["sha"]
+            # Read remote VERSION
+            url = f"https://raw.githubusercontent.com/{self._REPO}/main/VERSION"
+            with urllib.request.urlopen(url, timeout=5) as resp:
+                remote_version = resp.read().decode().strip()
 
-            # Get local SHA
-            result = subprocess.run(
-                ["git", "rev-parse", "HEAD"],
-                cwd=str(self._INSTALL_DIR),
-                capture_output=True,
-                text=True,
-            )
-            local_sha = result.stdout.strip() if result.returncode == 0 else ""
+            # Read local VERSION
+            local_version_file = self._INSTALL_DIR / "VERSION"
+            local_version = local_version_file.read_text().strip() if local_version_file.exists() else "0.0.0"
 
-            if remote_sha != local_sha and local_sha:
-                # Check if remote is actually ahead (not local ahead with unpushed commits)
-                result = subprocess.run(
-                    ["git", "merge-base", "--is-ancestor", remote_sha, "HEAD"],
-                    cwd=str(self._INSTALL_DIR),
-                    capture_output=True,
-                )
-                if result.returncode == 0:
-                    # remote_sha is ancestor of HEAD — local is ahead, no update needed
-                    log.info("Local is ahead of remote (unpushed commits), no update needed")
-                    return False
-                log.info("Update available: %s -> %s", local_sha[:8], remote_sha[:8])
+            if remote_version != local_version:
+                log.info("Update available: %s -> %s", local_version, remote_version)
                 return True
-            log.info("VoiceInk is up to date (%s)", local_sha[:8])
-            return False
-        except urllib.error.HTTPError as e:
-            if e.code == 403:
-                log.info("GitHub API rate limited, will retry next cycle")
-            else:
-                log.warning("Update check failed: HTTP %d", e.code, exc_info=True)
+            log.info("VoiceInk is up to date (v%s)", local_version)
             return False
         except Exception as e:
             log.warning("Update check failed: %s", e, exc_info=True)
             return False
 
     def _perform_update(self):
-        """Pull latest code, recompile NER tools, and restart."""
+        """Pull latest code, recompile NER tools, and restart.
+
+        Uses git pull as fast path for git-clone installs, with tarball
+        download as universal fallback for non-git installs.
+        """
         try:
+            import urllib.request
+
             log.info("Updating VoiceInk...")
             notify("VoiceInk", "Updating... will restart shortly")
 
-            # Capture current HEAD before pulling
-            pre_pull = subprocess.run(
-                ["git", "rev-parse", "HEAD"],
-                cwd=str(self._INSTALL_DIR),
-                capture_output=True,
-                text=True,
-            )
-            local_sha = pre_pull.stdout.strip() if pre_pull.returncode == 0 else ""
+            # Try git pull first (fast path for git-clone installs)
+            has_git = (self._INSTALL_DIR / ".git").exists()
+            if has_git:
+                result = subprocess.run(
+                    ["git", "pull", "origin", "main"],
+                    cwd=str(self._INSTALL_DIR),
+                    capture_output=True, text=True, timeout=30,
+                )
+                if result.returncode == 0:
+                    log.info("git pull: %s", result.stdout.strip())
+                else:
+                    log.warning("git pull failed, trying tarball: %s", result.stderr[:100])
+                    has_git = False
 
-            # Git pull
-            result = subprocess.run(
-                ["git", "pull", "origin", "main"],
-                cwd=str(self._INSTALL_DIR),
-                capture_output=True,
-                text=True,
-                timeout=30,
-            )
-            if result.returncode != 0:
-                log.error("git pull failed: %s", result.stderr)
-                notify("VoiceInk", f"Update failed: {result.stderr[:100]}")
-                return False
-            log.info("git pull: %s", result.stdout.strip())
+            if not has_git:
+                # Tarball fallback for non-git installs
+                import shutil
+                import tarfile
+                import tempfile
 
-            # Check if HEAD actually changed
-            new_head = subprocess.run(
-                ["git", "rev-parse", "HEAD"],
-                cwd=str(self._INSTALL_DIR),
-                capture_output=True,
-                text=True,
-            )
-            new_sha = new_head.stdout.strip() if new_head.returncode == 0 else ""
-            if new_sha == local_sha:
-                log.info("git pull brought no new commits, skipping restart")
-                notify("VoiceInk", "Already up to date")
-                return False
+                url = f"https://api.github.com/repos/{self._REPO}/tarball/main"
+                tmp_dir = tempfile.mkdtemp()
+                try:
+                    tar_path = os.path.join(tmp_dir, "update.tar.gz")
+                    urllib.request.urlretrieve(url, tar_path)
+                    with tarfile.open(tar_path) as tar:
+                        tar.extractall(tmp_dir)
+                    # Find extracted directory (GitHub names it repo-sha/)
+                    extracted = [d for d in os.listdir(tmp_dir)
+                                 if os.path.isdir(os.path.join(tmp_dir, d))]
+                    if extracted:
+                        src_dir = os.path.join(tmp_dir, extracted[0])
+                        # Copy updated files (preserve user data like settings, dictionary)
+                        for f in ["voice_input.py", "ner_daemon.swift", "ner_tool.swift",
+                                  "install.sh", "start.sh", "stop.sh", "uninstall.sh",
+                                  "requirements.txt", "VERSION", "README.md"]:
+                            src = os.path.join(src_dir, f)
+                            if os.path.exists(src):
+                                shutil.copy2(src, str(self._INSTALL_DIR / f))
+                        log.info("Updated from tarball")
+                finally:
+                    shutil.rmtree(tmp_dir, ignore_errors=True)
 
             # Update Python dependencies
             venv_pip = self._INSTALL_DIR / ".venv-py2app" / "bin" / "pip"
