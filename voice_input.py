@@ -713,6 +713,10 @@ class VoiceInputApp(rumps.App):
         self._last_key_event_time = 0.0
         self._last_audio_cb_time = 0.0
 
+        # Track source file mtime for code-change detection (#10)
+        self._startup_mtime = os.path.getmtime(os.path.abspath(__file__))
+        self._periodic_tick = 0
+
         # Sleep/wake observer
         self._sleeping = False
         self._wake_observer = None
@@ -930,6 +934,18 @@ class VoiceInputApp(rumps.App):
                 log.info("Audio devices changed, menu updated")
         except Exception:
             pass
+
+        # Detect code changes on disk (~every 10s, not every tick)
+        self._periodic_tick += 1
+        if self._periodic_tick % 10 == 0 and not getattr(self, '_restart_notified', False):
+            try:
+                if os.path.getmtime(os.path.abspath(__file__)) > self._startup_mtime:
+                    self._restart_notified = True
+                    notify("VoiceInk", "Code updated on disk. Restart to apply changes.")
+                    self._pending_status_title = "Restart needed"
+                    log.info("Code changed on disk, restart needed")
+            except OSError:
+                pass
 
         # Auto-reload dictionary
         try:
