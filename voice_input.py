@@ -75,6 +75,13 @@ try:
 except OSError:
     pass
 
+# Suppress stdout/stderr to prevent launchd from mixing raw output
+# into the structured log file. All logging goes through RotatingFileHandler.
+import sys as _sys
+if not _sys.stdout.isatty():
+    _sys.stdout = open(os.devnull, 'w')
+    _sys.stderr = open(os.devnull, 'w')
+
 
 # ── State ─────────────────────────────────────────────────────────
 
