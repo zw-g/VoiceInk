@@ -654,6 +654,7 @@ class VoiceInputApp(rumps.App):
         self.preferred_mic_name = self._settings.get("preferred_mic", None)
         self.active_mic_id = None
         self._last_device_list = []
+        self._last_device_refresh = 0.0
         if self.preferred_mic_name:
             log.info("Restored mic preference: '%s'", self.preferred_mic_name)
             # Resolve the device ID immediately
@@ -910,7 +911,16 @@ class VoiceInputApp(rumps.App):
                 log.warning("Watchdog: RECORDING_HOLD for %.0fs with no audio, listener likely dead", hold_time)
                 threading.Thread(target=self._watchdog_cancel, daemon=True).start()
 
-        # Mic hot-plug: check device list change
+        # Mic hot-plug: periodically reinitialize PortAudio to detect new devices
+        # SAFETY: only when IDLE and no stream open (sd._terminate during recording = crash)
+        if (self.state == State.IDLE and self.stream is None
+                and (time.monotonic() - self._last_device_refresh) > 15):
+            self._last_device_refresh = time.monotonic()
+            try:
+                sd._terminate()
+                sd._initialize()
+            except Exception:
+                pass
         try:
             current_devs = self._get_input_devices()
             if current_devs != self._last_device_list:
