@@ -1073,6 +1073,16 @@ class VoiceInputApp(rumps.App):
             local_sha = result.stdout.strip() if result.returncode == 0 else ""
 
             if remote_sha != local_sha and local_sha:
+                # Check if remote is actually ahead (not local ahead with unpushed commits)
+                result = subprocess.run(
+                    ["git", "merge-base", "--is-ancestor", remote_sha, "HEAD"],
+                    cwd=str(self._INSTALL_DIR),
+                    capture_output=True,
+                )
+                if result.returncode == 0:
+                    # remote_sha is ancestor of HEAD — local is ahead, no update needed
+                    log.info("Local is ahead of remote (unpushed commits), no update needed")
+                    return False
                 log.info("Update available: %s -> %s", local_sha[:8], remote_sha[:8])
                 return True
             log.info("VoiceInk is up to date (%s)", local_sha[:8])
@@ -1087,6 +1097,15 @@ class VoiceInputApp(rumps.App):
             log.info("Updating VoiceInk...")
             notify("VoiceInk", "Updating... will restart shortly")
 
+            # Capture current HEAD before pulling
+            pre_pull = subprocess.run(
+                ["git", "rev-parse", "HEAD"],
+                cwd=str(self._INSTALL_DIR),
+                capture_output=True,
+                text=True,
+            )
+            local_sha = pre_pull.stdout.strip() if pre_pull.returncode == 0 else ""
+
             # Git pull
             result = subprocess.run(
                 ["git", "pull", "origin", "main"],
@@ -1100,6 +1119,19 @@ class VoiceInputApp(rumps.App):
                 notify("VoiceInk", f"Update failed: {result.stderr[:100]}")
                 return False
             log.info("git pull: %s", result.stdout.strip())
+
+            # Check if HEAD actually changed
+            new_head = subprocess.run(
+                ["git", "rev-parse", "HEAD"],
+                cwd=str(self._INSTALL_DIR),
+                capture_output=True,
+                text=True,
+            )
+            new_sha = new_head.stdout.strip() if new_head.returncode == 0 else ""
+            if new_sha == local_sha:
+                log.info("git pull brought no new commits, skipping restart")
+                notify("VoiceInk", "Already up to date")
+                return False
 
             # Update Python dependencies
             venv_pip = self._INSTALL_DIR / ".venv-py2app" / "bin" / "pip"
