@@ -365,7 +365,8 @@ class TextPolisher:
                 sampler=self._sampler, verbose=False,
             )
             # Strip thinking block if present
-            clean = re.sub(r"<think>.*?</think>\s*", "", raw, flags=re.DOTALL).strip()
+            clean = re.sub(r"<think>.*?</think>\s*", "", raw, flags=re.DOTALL)
+            clean = re.sub(r"<think>.*", "", clean, flags=re.DOTALL).strip()
 
             # Safety: if output is empty or wildly different length, use original
             if not clean or len(clean) < len(text) * 0.3 or len(clean) > len(text) * 2:
@@ -641,6 +642,8 @@ class VoiceInputApp(rumps.App):
         self.session = None
         self.kb = keyboard.Controller()
         self._rec_start_time = 0.0
+        self._autostop_fired = False
+        self._watchdog_fired = False
         self._polisher = TextPolisher()
         self._text_polish = self._settings.get("text_polish", True)
         self._MAX_HISTORY = 30
@@ -933,9 +936,11 @@ class VoiceInputApp(rumps.App):
         # Auto-stop check — NO lock on main thread (lock would deadlock with pynput)
         if self.state in (State.RECORDING_HOLD, State.RECORDING_TOGGLE):
             if self._rec_start_time and (time.time() - self._rec_start_time) > MAX_RECORDING_SECS:
-                log.warning("Max recording duration reached (%ds)", MAX_RECORDING_SECS)
-                notify("VoiceInk", f"Max {MAX_RECORDING_SECS // 60}min reached, transcribing…")
-                threading.Thread(target=self._timer_auto_stop, daemon=True).start()
+                if not self._autostop_fired:
+                    self._autostop_fired = True
+                    log.warning("Max recording duration reached (%ds)", MAX_RECORDING_SECS)
+                    notify("VoiceInk", f"Max {MAX_RECORDING_SECS // 60}min reached, transcribing…")
+                    threading.Thread(target=self._timer_auto_stop, daemon=True).start()
 
         # Watchdog: detect stuck RECORDING_HOLD (keyboard listener may have died).
         # Only trigger if audio has ALSO stopped flowing — this distinguishes
@@ -944,8 +949,10 @@ class VoiceInputApp(rumps.App):
             hold_time = time.time() - self._rec_start_time
             audio_alive = (time.monotonic() - self._last_audio_cb_time) < 5.0
             if hold_time > 3 and not audio_alive:
-                log.warning("Watchdog: RECORDING_HOLD for %.0fs with no audio, listener likely dead", hold_time)
-                threading.Thread(target=self._watchdog_cancel, daemon=True).start()
+                if not self._watchdog_fired:
+                    self._watchdog_fired = True
+                    log.warning("Watchdog: RECORDING_HOLD for %.0fs with no audio, listener likely dead", hold_time)
+                    threading.Thread(target=self._watchdog_cancel, daemon=True).start()
 
         # Mic hot-plug: periodically reinitialize PortAudio to detect new devices
         # Run in background thread to avoid blocking main thread UI (#13)
@@ -1564,6 +1571,8 @@ class VoiceInputApp(rumps.App):
         self._resolve_mic()
         self.audio_frames = []
         self._rec_start_time = time.time()
+        self._autostop_fired = False
+        self._watchdog_fired = False
 
         # [P1-2] Crash protection for mic errors
         try:
@@ -1648,6 +1657,8 @@ class VoiceInputApp(rumps.App):
 
     def _prefetch_context(self):
         """Pre-fetch screen context in background when app switches."""
+        if self.state in (State.RECORDING_HOLD, State.RECORDING_TOGGLE, State.PROCESSING):
+            return
         try:
             self.screen_text = get_screen_text()
             if self.screen_text:
@@ -1841,7 +1852,7 @@ class VoiceInputApp(rumps.App):
                 if len(key) < 2:
                     continue
                 if key not in terms:
-                    terms[key] = w
+                    terms[key] = w.rstrip('.,;:!?\u2026')
 
         log.info("Context: %d terms (%.1fs audio)", len(terms), audio_duration)
         return " ".join(sorted(terms.values())) if terms else ""
@@ -2094,6 +2105,9 @@ class VoiceInputApp(rumps.App):
                     log.info("Toggle mode")
                 elif self.state == State.RECORDING_TOGGLE:
                     self._stop_rec_and_transcribe()
+                elif self.state == State.PROCESSING:
+                    play_sound("Tink")
+                    log.info("Hotkey pressed during processing — waiting for transcription")
             except Exception as e:
                 log.error("Key press handler failed: %s", e, exc_info=True)
                 self.state = State.IDLE
