@@ -423,9 +423,18 @@ def load_settings():
 
 
 def save_settings(settings):
-    """Save user settings to disk."""
+    """Save user settings to disk (atomic write)."""
     try:
-        SETTINGS_PATH.write_text(json.dumps(settings, indent=2, ensure_ascii=False) + "\n")
+        import tempfile
+        tmp_fd, tmp_path = tempfile.mkstemp(dir=str(SETTINGS_PATH.parent), suffix='.tmp')
+        try:
+            with os.fdopen(tmp_fd, 'w') as f:
+                json.dump(settings, f, indent=2, ensure_ascii=False)
+                f.write('\n')
+            os.replace(tmp_path, str(SETTINGS_PATH))
+        except Exception:
+            os.unlink(tmp_path)
+            raise
     except Exception as e:
         log.warning("Failed to save settings: %s", e, exc_info=True)
 
@@ -437,7 +446,18 @@ def load_dictionary(path):
         except Exception as e:
             log.warning("Bad dictionary file: %s", e, exc_info=True)
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(DEFAULT_DICT, indent=2, ensure_ascii=False) + "\n")
+    import tempfile
+    tmp_fd, tmp_path = tempfile.mkstemp(dir=str(path.parent), suffix='.tmp')
+    try:
+        with os.fdopen(tmp_fd, 'w') as f:
+            json.dump(DEFAULT_DICT, f, indent=2, ensure_ascii=False)
+            f.write('\n')
+        os.replace(tmp_path, str(path))
+    except Exception:
+        try:
+            os.unlink(tmp_path)
+        except OSError:
+            pass
     return dict(DEFAULT_DICT)
 
 
