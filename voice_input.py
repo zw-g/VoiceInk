@@ -1908,19 +1908,23 @@ class VoiceInputApp(rumps.App):
 
     def _type_text(self, text):
         """[AUDIT-21] 3-tier hybrid: AX → CGEvent → clipboard paste."""
-        with self._type_lock:
-            # Tier 1: AX insertion (instant, no clipboard, ~8ms)
-            if self._try_ax_insert(text):
-                log.info("Typed %d chars via AX API", len(text))
-                return
-            # Tier 2: CGEvent keyboard synthesis (no clipboard, universal, ~3ms/20chars)
-            if len(text) <= 200:
-                self._type_via_cgevent(text)
-                log.info("Typed %d chars via CGEvent", len(text))
-                return
-            # Tier 3: Clipboard paste (long text only)
-            self._clipboard_paste(text)
-            log.info("Typed %d chars via clipboard paste", len(text))
+        try:
+            with self._type_lock:
+                # Tier 1: AX insertion (instant, no clipboard, ~8ms)
+                if self._try_ax_insert(text):
+                    log.info("Typed %d chars via AX API", len(text))
+                    return
+                # Tier 2: CGEvent keyboard synthesis (no clipboard, universal, ~3ms/20chars)
+                if len(text) <= 200:
+                    self._type_via_cgevent(text)
+                    log.info("Typed %d chars via CGEvent", len(text))
+                    return
+                # Tier 3: Clipboard paste (long text only)
+                self._clipboard_paste(text)
+                log.info("Typed %d chars via clipboard paste", len(text))
+        except Exception as e:
+            log.error("Text insertion failed: %s", e, exc_info=True)
+            notify("VoiceInk", "Could not type text — try clicking a text field first")
 
     def _try_ax_insert(self, text):
         """Insert text via Accessibility API. Returns True if ACTUALLY successful.
