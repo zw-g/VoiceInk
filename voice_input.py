@@ -682,6 +682,16 @@ class DictionaryGuard:
         self._rejected.add(word.lower())
 
 
+if _HAS_VISION:
+    class _PopupDismissTarget(NSObject):
+        """ObjC target for popup dismiss button."""
+        _popup_ref = None
+
+        def dismiss_(self, sender):
+            if self._popup_ref:
+                self._popup_ref._dismiss(confirmed=False)
+
+
 class DictionaryPopup:
     """Floating HUD popup for dictionary add confirmation with countdown."""
 
@@ -695,6 +705,7 @@ class DictionaryPopup:
         self._progress = None
         self._count_label = None
         self._tick_thread = None
+        self._tick_gen = 0  # Generation counter to stop stale tick threads
         self._pending_update = None  # (countdown_remaining,) or None
         self._pending_dismiss = None  # True/False or None
 
@@ -789,11 +800,12 @@ class DictionaryPopup:
             btn.setTitle_("✕")
             btn.setBordered_(False)
             btn.setFont_(NSFont.systemFontOfSize_(14.0))
-            btn.setTarget_(None)
-            btn.setAction_(None)
+            if _HAS_VISION:
+                self._dismiss_target = _PopupDismissTarget.alloc().init()
+                self._dismiss_target._popup_ref = self
+                btn.setTarget_(self._dismiss_target)
+                btn.setAction_(b'dismiss:')
             content.addSubview_(btn)
-            # Note: button click handled via panel mouseDown override is complex;
-            # instead we make clicking ANYWHERE on the panel dismiss it
             self._panel = panel
 
             # Fade in
@@ -803,14 +815,16 @@ class DictionaryPopup:
             # Start countdown in background
             self._pending_update = None
             self._pending_dismiss = None
+            self._tick_gen += 1
+            gen = self._tick_gen
 
             def _tick():
-                while self._countdown > 0 and self._panel:
+                while self._countdown > 0 and self._panel and self._tick_gen == gen:
                     time.sleep(1.0)
                     self._countdown -= 1
-                    if self._panel:
+                    if self._panel and self._tick_gen == gen:
                         self._pending_update = self._countdown
-                if self._panel and self._countdown <= 0:
+                if self._panel and self._countdown <= 0 and self._tick_gen == gen:
                     self._pending_dismiss = True
 
             self._tick_thread = threading.Thread(target=_tick, daemon=True)
@@ -1172,7 +1186,7 @@ class VoiceInputApp(rumps.App):
         popup = DictionaryPopup.shared()
         if popup._panel:
             popup.tick_main_thread()
-        if self._pending_dict_popup:
+        if self._pending_dict_popup and self.state == State.IDLE:
             word = self._pending_dict_popup
             self._pending_dict_popup = None
             popup.show(word, self._on_dict_popup_done)
@@ -1889,6 +1903,10 @@ class VoiceInputApp(rumps.App):
 
     def _start_rec(self):
         DictionaryPopup.shared().dismiss_if_active()
+        if self._correction_timer:
+            self._correction_timer.cancel()
+            self._correction_timer = None
+        self._pending_dict_popup = None
         self._resolve_mic()
         self.audio_frames = []
         self._rec_start_time = time.time()
@@ -2246,8 +2264,11 @@ class VoiceInputApp(rumps.App):
                 # Tier 1: AX insertion (instant, no clipboard, ~8ms)
                 if self._try_ax_insert(text):
                     log.info("Typed %d chars via AX API", len(text))
+                    if self._last_ax_inserted:
+                        self._schedule_correction_check()
                     return
                 # Tier 2: CGEvent keyboard synthesis (no clipboard, universal, ~3ms/20chars)
+                self._last_ax_inserted = None  # Clear stale AX ref
                 if len(text) <= 200:
                     self._type_via_cgevent(text)
                     log.info("Typed %d chars via CGEvent", len(text))
@@ -2258,10 +2279,6 @@ class VoiceInputApp(rumps.App):
         except Exception as e:
             log.error("Text insertion failed: %s", e, exc_info=True)
             notify("VoiceInk", "Could not type text — try clicking a text field first")
-
-        # Schedule correction detection (AX tier only)
-        if self._last_ax_inserted:
-            self._schedule_correction_check()
 
     def _try_ax_insert(self, text):
         """Insert text via Accessibility API. Returns True if ACTUALLY successful.
@@ -2437,6 +2454,8 @@ class VoiceInputApp(rumps.App):
             self._evaluate_correction(inserted_text, corrected)
         except Exception as e:
             log.debug("Correction check failed: %s", e)
+        finally:
+            self._last_ax_inserted = None
 
     def _evaluate_correction(self, original, corrected):
         """Evaluate a correction for dictionary-worthiness."""
