@@ -1011,6 +1011,7 @@ class VoiceInputApp(rumps.App):
         self._dict_mtime = 0.0
         self._keyboard_listener = None
         self._ner_lock = threading.Lock()
+        self._update_lock = threading.Lock()
         self._last_key_event_time = 0.0
         self._last_audio_cb_time = 0.0
 
@@ -1490,13 +1491,17 @@ class VoiceInputApp(rumps.App):
                         src_dir = os.path.join(tmp_dir, extracted[0])
                         for f in ["voice_input.py", "ner_daemon.swift", "ner_tool.swift",
                                   "install.sh", "start.sh", "stop.sh", "uninstall.sh",
-                                  "requirements.txt", "VERSION", "README.md"]:
+                                  "requirements.txt", "VERSION", "README.md",
+                                  "VoiceInk.icns", "icon_light.png", "icon_dark.png", "icon_glow.png"]:
                             src = os.path.join(src_dir, f)
                             if os.path.exists(src):
                                 dst = str(self._INSTALL_DIR / f)
                                 tmp = dst + ".tmp"
                                 shutil.copy2(src, tmp)
                                 os.replace(tmp, dst)
+                    else:
+                        log.warning("Tarball had no subdirectory")
+                        return False
                     log.info("Updated from tarball")
                 finally:
                     shutil.rmtree(tmp_dir, ignore_errors=True)
@@ -1552,21 +1557,23 @@ class VoiceInputApp(rumps.App):
         threading.Thread(target=self._do_manual_update, daemon=True).start()
 
     def _do_manual_update(self):
-        if self._check_for_update():
-            self._perform_update()
-        else:
-            notify("VoiceInk", "Already up to date")
+        with self._update_lock:
+            if self._check_for_update():
+                self._perform_update()
+            else:
+                notify("VoiceInk", "Already up to date")
 
     def _auto_update_check(self):
         """Background auto-update: download silently, show restart menu item."""
         time.sleep(10)
-        if self._check_for_update():
-            log.info("Update available — downloading silently")
-            if self._download_update():
-                self._update_downloaded = True
-                log.info("Update downloaded — waiting for user to restart")
-            else:
-                notify("VoiceInk", "Update available but download failed.")
+        with self._update_lock:
+            if self._check_for_update():
+                log.info("Update available — downloading silently")
+                if self._download_update():
+                    self._update_downloaded = True
+                    log.info("Update downloaded — waiting for user to restart")
+                else:
+                    notify("VoiceInk", "Update available but download failed.")
 
     def _toggle_auto_update(self, sender):
         self._auto_update = not self._auto_update
@@ -1850,13 +1857,6 @@ class VoiceInputApp(rumps.App):
         log.info("Restarting VoiceInk (user-triggered)...")
         notify("VoiceInk", "Restarting...")
         os.environ["VOICEINK_RESTARTED"] = "1"
-
-        # [#55] Wind down NSApplication before cleanup to prevent
-        # 'quit unexpectedly' dialog on os.execv restart.
-        try:
-            rumps.quit_application()
-        except Exception:
-            pass
 
         self._cleanup_resources()
         time.sleep(0.5)
