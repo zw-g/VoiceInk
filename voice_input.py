@@ -39,6 +39,7 @@ try:
         NSWorkspace,
         NSWorkspaceWillSleepNotification,
         NSWorkspaceDidWakeNotification,
+        NSWorkspaceDidActivateApplicationNotification,
     )
 
     _HAS_VISION = True
@@ -129,6 +130,10 @@ class _SleepWakeObserver(NSObject):
     def handleDidWake_(self, notification):
         if self._app:
             self._app._on_wake()
+
+    def handleAppSwitch_(self, notification):
+        if self._app and self._app.screen_ctx_on:
+            threading.Thread(target=self._app._prefetch_context, daemon=True).start()
 
 
 # ── Timing helper [P3-6] ─────────────────────────────────────────
@@ -776,6 +781,16 @@ class VoiceInputApp(rumps.App):
             )
             self._wake_observer = obs
             log.info("Sleep/wake observer registered")
+
+            # Context pre-fetch on app switch
+            try:
+                nc.addObserver_selector_name_object_(
+                    obs, obs.handleAppSwitch_,
+                    NSWorkspaceDidActivateApplicationNotification, None
+                )
+                log.info("App-switch context pre-fetch registered")
+            except Exception as e:
+                log.warning("App-switch observer failed: %s", e, exc_info=True)
         except Exception as e:
             log.warning("Failed to register sleep/wake observer: %s", e, exc_info=True)
 
@@ -1669,6 +1684,16 @@ class VoiceInputApp(rumps.App):
         finally:
             self._ocr_done.set()  # [P2-2] signal completion
 
+    def _prefetch_context(self):
+        """Pre-fetch screen context in background when app switches."""
+        try:
+            self.screen_text = get_screen_text()
+            if self.screen_text:
+                self._extract_entities(self.screen_text)  # warm NER cache
+                log.debug("Context pre-fetched (%d chars)", len(self.screen_text))
+        except Exception:
+            pass
+
     # [P3-1] NER daemon — long-running process, no spawn overhead per call
     _NER_DAEMON_PATH = str(CONFIG_DIR / "ner_daemon")
     _NER_TOOL_PATH = str(CONFIG_DIR / "ner_tool")  # fallback
@@ -1818,7 +1843,7 @@ class VoiceInputApp(rumps.App):
         for w in dictionary.get("vocabulary", []):
             terms[w.lower()] = w
 
-        self._ocr_done.wait(timeout=2.0)
+        self._ocr_done.wait(timeout=0.5)
 
         if self.screen_text:
             entities = self._extract_entities(self.screen_text)
