@@ -889,6 +889,11 @@ class VoiceInputApp(rumps.App):
             self._rebuild_history_menu()
             self._history_dirty = False
 
+        # Rebuild mic menu on main thread (triggered by background device refresh)
+        if getattr(self, "_mic_menu_dirty", False):
+            self._rebuild_mic_menu()
+            self._mic_menu_dirty = False
+
         # Apply pending status title updates from background threads
         pending = getattr(self, "_pending_status_title", None)
         if pending is not None:
@@ -926,24 +931,28 @@ class VoiceInputApp(rumps.App):
                 threading.Thread(target=self._watchdog_cancel, daemon=True).start()
 
         # Mic hot-plug: periodically reinitialize PortAudio to detect new devices
-        # SAFETY: only when IDLE and no stream open (sd._terminate during recording = crash)
+        # Run in background thread to avoid blocking main thread UI (#13)
         if (self.state == State.IDLE and self.stream is None
-                and (time.monotonic() - self._last_device_refresh) > 15):
+                and (time.monotonic() - self._last_device_refresh) > 60):
             self._last_device_refresh = time.monotonic()
-            try:
-                sd._terminate()
-                sd._initialize()
-            except Exception:
-                pass
-        try:
-            current_devs = self._get_input_devices()
-            if current_devs != self._last_device_list:
-                self._last_device_list = current_devs
-                self._resolve_mic()
-                self._rebuild_mic_menu()
-                log.info("Audio devices changed, menu updated")
-        except Exception:
-            pass
+
+            def _refresh_devices():
+                try:
+                    sd._terminate()
+                    sd._initialize()
+                except Exception:
+                    pass
+                try:
+                    current_devs = self._get_input_devices()
+                    if current_devs != self._last_device_list:
+                        self._last_device_list = current_devs
+                        self._resolve_mic()
+                        self._mic_menu_dirty = True
+                        log.info("Audio devices changed, menu updated")
+                except Exception:
+                    pass
+
+            threading.Thread(target=_refresh_devices, daemon=True).start()
 
         # Detect code changes on disk (~every 10s, not every tick)
         self._periodic_tick += 1
