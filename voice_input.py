@@ -28,7 +28,12 @@ from pynput import keyboard
 try:
     import Quartz
     import Vision
-    from AppKit import NSWorkspace
+    from AppKit import (
+        NSObject,
+        NSWorkspace,
+        NSWorkspaceWillSleepNotification,
+        NSWorkspaceDidWakeNotification,
+    )
 
     _HAS_VISION = True
 except ImportError:
@@ -91,6 +96,22 @@ class State(enum.Enum):
         if self == State.ERROR:
             return "error"
         return "loading"
+
+
+# ── Sleep/Wake observer ─────────────────────────────────────────
+
+
+class _SleepWakeObserver(NSObject):
+    """PyObjC observer for macOS sleep/wake notifications."""
+    _app = None
+
+    def handleWillSleep_(self, notification):
+        if self._app:
+            self._app._on_will_sleep()
+
+    def handleDidWake_(self, notification):
+        if self._app:
+            self._app._on_wake()
 
 
 # ── Timing helper [P3-6] ─────────────────────────────────────────
@@ -659,6 +680,25 @@ class VoiceInputApp(rumps.App):
         self._ner_lock = threading.Lock()
         self._last_key_event_time = 0.0
         self._last_audio_cb_time = 0.0
+
+        # Sleep/wake observer
+        self._sleeping = False
+        self._wake_observer = None
+        try:
+            obs = _SleepWakeObserver.alloc().init()
+            obs._app = self
+            nc = NSWorkspace.sharedWorkspace().notificationCenter()
+            nc.addObserver_selector_name_object_(
+                obs, obs.handleWillSleep_, NSWorkspaceWillSleepNotification, None
+            )
+            nc.addObserver_selector_name_object_(
+                obs, obs.handleDidWake_, NSWorkspaceDidWakeNotification, None
+            )
+            self._wake_observer = obs
+            log.info("Sleep/wake observer registered")
+        except Exception as e:
+            log.warning("Failed to register sleep/wake observer: %s", e, exc_info=True)
+
         threading.Thread(target=self._setup, daemon=True).start()
 
     def _ensure_image_view(self):
@@ -1261,6 +1301,11 @@ class VoiceInputApp(rumps.App):
     # [P1-5] Graceful shutdown
     def _quit(self, _):
         log.info("Shutting down")
+        if self._wake_observer:
+            try:
+                NSWorkspace.sharedWorkspace().notificationCenter().removeObserver_(self._wake_observer)
+            except Exception:
+                pass
         if self.stream:
             try:
                 self.stream.stop()
@@ -1278,6 +1323,39 @@ class VoiceInputApp(rumps.App):
         self.state = State.IDLE
         self._cancel_timer()
         rumps.quit_application()
+
+    # ── Sleep/Wake handling ───────────────────────────────────
+
+    def _on_will_sleep(self):
+        """Pre-sleep: save active recording, close stream."""
+        log.info("System will sleep")
+        self._sleeping = True
+        with self.lock:
+            if self.state in (State.RECORDING_HOLD, State.RECORDING_TOGGLE,
+                              State.WAITING_DOUBLE_CLICK):
+                self._cancel_timer()
+                log.info("Sleep: stopping recording (state=%s)", self.state.name)
+                self._stop_rec_and_transcribe()
+
+    def _on_wake(self):
+        """Post-wake: refresh audio devices after hardware re-enumerates."""
+        log.info("System did wake")
+
+        def _wake_recovery():
+            time.sleep(2)  # Wait for hardware re-enumeration
+            try:
+                if self.stream is None:
+                    sd._terminate()
+                    sd._initialize()
+                    log.info("Wake: PortAudio reinitialized")
+            except Exception as e:
+                log.warning("Wake: PortAudio reinit failed: %s", e, exc_info=True)
+            self._resolve_mic()
+            self._sleeping = False
+            self._pending_status_title = "Ready"
+            log.info("Wake: recovery complete")
+
+        threading.Thread(target=_wake_recovery, daemon=True).start()
 
     # ── Recording ─────────────────────────────────────────────
 
@@ -1767,6 +1845,8 @@ class VoiceInputApp(rumps.App):
         with self.lock:
             try:
                 if self.state == State.IDLE:
+                    if self._sleeping:
+                        return
                     if self.session is None:
                         play_sound("Basso")
                         notify("VoiceInk", "Model not loaded — check log for errors")
