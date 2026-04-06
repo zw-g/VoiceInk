@@ -40,11 +40,18 @@
 
 ## Install
 
+### Option 1: Git Clone (recommended — enables fast updates)
 ```bash
 git clone https://github.com/zw-g/VoiceInk.git
 cd VoiceInk
 ./install.sh
 ```
+
+### Option 2: Download ZIP (no git required)
+1. Download from https://github.com/zw-g/VoiceInk/archive/refs/heads/main.zip
+2. Unzip and run `./install.sh`
+
+Both methods work identically. Git-clone installs get faster updates via `git pull`; ZIP installs update via tarball download. VoiceInk auto-detects which method to use.
 
 The install script will:
 1. Create a Python virtual environment
@@ -53,6 +60,11 @@ The install script will:
 4. Compile the Swift NER tools
 5. Set up the LaunchAgent
 6. Copy VoiceInk.app to /Applications/
+
+### Uninstall
+```bash
+~/.local/voice-input/uninstall.sh
+```
 
 ## Usage
 
