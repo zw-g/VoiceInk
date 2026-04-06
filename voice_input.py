@@ -922,7 +922,7 @@ class VoiceInputApp(rumps.App):
                 if name == self.preferred_mic_name:
                     if self.active_mic_id != dev_id:
                         self.active_mic_id = dev_id
-                        log.info("Mic: preferred '%s' reconnected", name)
+                        log.info("Mic: preferred '%s' resolved to device ID %d", name, dev_id)
                     return
             if self.active_mic_id is not None:
                 self.active_mic_id = None
@@ -1146,6 +1146,8 @@ class VoiceInputApp(rumps.App):
             local_version_file = self._INSTALL_DIR / "VERSION"
             local_version = local_version_file.read_text().strip() if local_version_file.exists() else "0.0.0"
 
+            # Simple string comparison — works for semver as long as
+            # versions are bumped correctly (1.0.0 < 1.0.1 < 1.1.0)
             if remote_version != local_version:
                 log.info("Update available: %s -> %s", local_version, remote_version)
                 return True
@@ -1193,7 +1195,7 @@ class VoiceInputApp(rumps.App):
                     tar_path = os.path.join(tmp_dir, "update.tar.gz")
                     urllib.request.urlretrieve(url, tar_path)
                     with tarfile.open(tar_path) as tar:
-                        tar.extractall(tmp_dir)
+                        tar.extractall(tmp_dir, filter='data')
                     # Find extracted directory (GitHub names it repo-sha/)
                     extracted = [d for d in os.listdir(tmp_dir)
                                  if os.path.isdir(os.path.join(tmp_dir, d))]
@@ -1205,7 +1207,10 @@ class VoiceInputApp(rumps.App):
                                   "requirements.txt", "VERSION", "README.md"]:
                             src = os.path.join(src_dir, f)
                             if os.path.exists(src):
-                                shutil.copy2(src, str(self._INSTALL_DIR / f))
+                                dst = str(self._INSTALL_DIR / f)
+                                tmp = dst + ".tmp"
+                                shutil.copy2(src, tmp)
+                                os.replace(tmp, dst)
                         log.info("Updated from tarball")
                 finally:
                     shutil.rmtree(tmp_dir, ignore_errors=True)
@@ -1268,7 +1273,12 @@ class VoiceInputApp(rumps.App):
             os.execv(python, [python, script])
 
         except Exception as e:
-            log.error("Update failed: %s", e, exc_info=True)
+            # Log handlers may be closed after cleanup, use stderr as fallback
+            import sys as _sys
+            try:
+                log.error("Update failed: %s", e, exc_info=True)
+            except Exception:
+                print(f"Update failed: {e}", file=_sys.stderr)
             notify("VoiceInk", f"Update failed: {e}")
             return False
 
