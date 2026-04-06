@@ -286,6 +286,25 @@ Output 2: 2026年4月3号下午2:30我们开会
 Example 3: 呃这个model的performance大概百分之九十五然后呢还不错
 Output 3: 这个model的performance大概95%，还不错"""
 
+_DICT_CLASSIFY_PROMPT = (
+    "You classify voice transcription corrections. Given the ASR output and "
+    "user's correction, decide if the corrected word should be added to the "
+    "speech recognition dictionary.\n"
+    "Answer ONLY 'YES word' or 'NO'.\n\n"
+    "ADD (YES): proper nouns, brand names, technical terms, product names, "
+    "person names, Chinese proper nouns — words the ASR consistently gets wrong.\n"
+    "SKIP (NO): common words, typo/grammar fixes, punctuation changes, "
+    "single characters, rephrasing, capitalization-only changes.\n\n"
+    "Be PICKY. When in doubt, answer NO.\n\n"
+    "Examples:\n"
+    '- ASR: "pie torch" -> User: "PyTorch" => YES PyTorch\n'
+    '- ASR: "anthrobic" -> User: "Anthropic" => YES Anthropic\n'
+    '- ASR: "the model are good" -> User: "the model is good" => NO\n'
+    '- ASR: "kuda" -> User: "CUDA" => YES CUDA\n'
+    '- ASR: "he go" -> User: "he went" => NO\n'
+    '- ASR: "法布里凯特" -> User: "Phabricator" => YES Phabricator\n'
+)
+
 
 def _needs_polish(text):
     """Quick heuristic: does this text need LLM polishing?
@@ -327,6 +346,7 @@ class TextPolisher:
         self._sampler = None
         self._loaded = False
         self._load_failed = False
+        self._inference_lock = threading.Lock()
 
     def load(self):
         """Load the LLM model. Call from background thread."""
@@ -359,11 +379,12 @@ class TextPolisher:
             prompt = self._tokenizer.apply_chat_template(
                 messages, add_generation_prompt=True
             )
-            raw = generate(
-                self._model, self._tokenizer, prompt=prompt,
-                max_tokens=max(len(text) * 3, 200),
-                sampler=self._sampler, verbose=False,
-            )
+            with self._inference_lock:
+                raw = generate(
+                    self._model, self._tokenizer, prompt=prompt,
+                    max_tokens=max(len(text) * 3, 200),
+                    sampler=self._sampler, verbose=False,
+                )
             # Strip thinking block if present
             clean = re.sub(r"<think>.*?</think>\s*", "", raw, flags=re.DOTALL)
             clean = re.sub(r"<think>.*", "", clean, flags=re.DOTALL).strip()
@@ -376,6 +397,37 @@ class TextPolisher:
         except Exception as e:
             log.warning("Text polish failed: %s", e, exc_info=True)
             return text
+
+    def classify_correction(self, original, corrected, dictionary_words):
+        """Classify whether a correction is dictionary-worthy. Returns (bool, word)."""
+        if not self._loaded or not corrected.strip():
+            return False, None
+        try:
+            from mlx_lm import generate
+            dict_sample = ", ".join(dictionary_words[:50])
+            messages = [
+                {"role": "system", "content": _DICT_CLASSIFY_PROMPT + f"\nCurrent dictionary: {dict_sample}"},
+                {"role": "user", "content": f"ASR: \"{original}\"\nUser: \"{corrected}\"\n/no_think"},
+            ]
+            prompt = self._tokenizer.apply_chat_template(
+                messages, add_generation_prompt=True
+            )
+            with self._inference_lock:
+                raw = generate(
+                    self._model, self._tokenizer, prompt=prompt,
+                    max_tokens=30, sampler=self._sampler, verbose=False,
+                )
+            clean = re.sub(r"<think>.*?</think>\s*", "", raw, flags=re.DOTALL)
+            clean = re.sub(r"<think>.*", "", clean, flags=re.DOTALL).strip()
+            log.info("Dict classify: '%s' -> '%s' => %s", original, corrected, clean)
+            if clean.upper().startswith("YES"):
+                parts = clean.split(None, 1)
+                word = parts[1].strip() if len(parts) > 1 else corrected.strip()
+                return True, word
+            return False, None
+        except Exception as e:
+            log.warning("Dict classify failed: %s", e)
+            return False, None
 
 
 # ── Utilities ─────────────────────────────────────────────────────
@@ -600,6 +652,212 @@ def get_screen_text():
     return result
 
 
+class DictionaryGuard:
+    """Anti-spam logic for dictionary auto-additions."""
+
+    def __init__(self):
+        self._session_adds = 0
+        self._rejected = set()
+        self._MAX_PER_SESSION = 3
+        self._MAX_DICT_SIZE = 500
+
+    def should_prompt(self, word, dictionary):
+        if not word or len(word) < 2:
+            return False
+        if self._session_adds >= self._MAX_PER_SESSION:
+            return False
+        vocab = dictionary.get("vocabulary", [])
+        if len(vocab) >= self._MAX_DICT_SIZE:
+            return False
+        if word.lower() in {w.lower() for w in vocab}:
+            return False
+        if word.lower() in self._rejected:
+            return False
+        return True
+
+    def record_add(self):
+        self._session_adds += 1
+
+    def record_reject(self, word):
+        self._rejected.add(word.lower())
+
+
+class DictionaryPopup:
+    """Floating HUD popup for dictionary add confirmation with countdown."""
+
+    _instance = None
+
+    def __init__(self):
+        self._panel = None
+        self._countdown = 5
+        self._word = None
+        self._callback = None
+        self._progress = None
+        self._count_label = None
+        self._tick_thread = None
+        self._pending_update = None  # (countdown_remaining,) or None
+        self._pending_dismiss = None  # True/False or None
+
+    @classmethod
+    def shared(cls):
+        if cls._instance is None:
+            cls._instance = cls()
+        return cls._instance
+
+    def show(self, word, on_complete):
+        """Show popup. MUST be called on main thread."""
+        if self._panel:
+            self._dismiss(confirmed=False)
+
+        try:
+            from AppKit import (
+                NSPanel, NSScreen, NSColor, NSFont, NSMakeRect,
+                NSTextField, NSButton,
+                NSBackingStoreBuffered,
+                NSVisualEffectView,
+                NSProgressIndicator,
+            )
+
+            self._word = word
+            self._callback = on_complete
+            self._countdown = 5
+
+            W, H = 340, 52
+            screen = NSScreen.mainScreen()
+            if not screen:
+                return
+            sx = screen.frame().size.width
+            x = (sx - W) / 2
+            y = 80
+
+            # Borderless non-activating panel
+            panel = NSPanel.alloc().initWithContentRect_styleMask_backing_defer_(
+                NSMakeRect(x, y, W, H),
+                128,  # NSWindowStyleMaskNonactivatingPanel
+                NSBackingStoreBuffered,
+                False,
+            )
+            panel.setLevel_(3)  # NSFloatingWindowLevel
+            panel.setCollectionBehavior_(1 | 256)  # CanJoinAllSpaces | FullScreenAuxiliary
+            panel.setOpaque_(False)
+            panel.setBackgroundColor_(NSColor.clearColor())
+            panel.setHasShadow_(True)
+            panel.setAlphaValue_(0.0)
+            panel.setHidesOnDeactivate_(False)
+            panel.setFloatingPanel_(True)
+
+            # HUD background
+            content = NSVisualEffectView.alloc().initWithFrame_(NSMakeRect(0, 0, W, H))
+            content.setMaterial_(13)  # HUDWindow
+            content.setBlendingMode_(1)  # BehindWindow
+            content.setState_(1)  # Active
+            content.setWantsLayer_(True)
+            content.layer().setCornerRadius_(12.0)
+            content.layer().setMasksToBounds_(True)
+            panel.setContentView_(content)
+
+            # Label
+            display = word if len(word) <= 20 else word[:18] + ".."
+            label = NSTextField.labelWithString_(f"Add '{display}' to dictionary?")
+            label.setFrame_(NSMakeRect(16, 16, 210, 20))
+            label.setFont_(NSFont.systemFontOfSize_(13.0))
+            label.setTextColor_(NSColor.whiteColor())
+            content.addSubview_(label)
+
+            # Progress bar
+            progress = NSProgressIndicator.alloc().initWithFrame_(
+                NSMakeRect(16, 8, W - 80, 4)
+            )
+            progress.setStyle_(0)  # Bar
+            progress.setMinValue_(0.0)
+            progress.setMaxValue_(5.0)
+            progress.setDoubleValue_(5.0)
+            progress.setIndeterminate_(False)
+            content.addSubview_(progress)
+            self._progress = progress
+
+            # Countdown label
+            clabel = NSTextField.labelWithString_("5s")
+            clabel.setFrame_(NSMakeRect(W - 58, 16, 24, 20))
+            clabel.setFont_(NSFont.monospacedDigitSystemFontOfSize_weight_(13.0, 0.2))
+            clabel.setTextColor_(NSColor.colorWithWhite_alpha_(1.0, 0.7))
+            content.addSubview_(clabel)
+            self._count_label = clabel
+
+            # Dismiss (X) button
+            btn = NSButton.alloc().initWithFrame_(NSMakeRect(W - 32, 14, 24, 24))
+            btn.setTitle_("✕")
+            btn.setBordered_(False)
+            btn.setFont_(NSFont.systemFontOfSize_(14.0))
+            btn.setTarget_(None)
+            btn.setAction_(None)
+            content.addSubview_(btn)
+            # Note: button click handled via panel mouseDown override is complex;
+            # instead we make clicking ANYWHERE on the panel dismiss it
+            self._panel = panel
+
+            # Fade in
+            panel.orderFrontRegardless()
+            panel.setAlphaValue_(0.95)
+
+            # Start countdown in background
+            self._pending_update = None
+            self._pending_dismiss = None
+
+            def _tick():
+                while self._countdown > 0 and self._panel:
+                    time.sleep(1.0)
+                    self._countdown -= 1
+                    if self._panel:
+                        self._pending_update = self._countdown
+                if self._panel and self._countdown <= 0:
+                    self._pending_dismiss = True
+
+            self._tick_thread = threading.Thread(target=_tick, daemon=True)
+            self._tick_thread.start()
+
+        except Exception as e:
+            log.warning("Dictionary popup failed: %s", e)
+            self._panel = None
+
+    def tick_main_thread(self):
+        """Called from _periodic to update UI. MUST be on main thread."""
+        if self._pending_update is not None:
+            remaining = self._pending_update
+            self._pending_update = None
+            if self._count_label:
+                self._count_label.setStringValue_(f"{remaining}s")
+            if self._progress:
+                self._progress.setDoubleValue_(float(remaining))
+
+        if self._pending_dismiss is True:
+            self._pending_dismiss = None
+            self._dismiss(confirmed=True)
+
+    def _dismiss(self, confirmed):
+        if not self._panel:
+            return
+        word = self._word
+        callback = self._callback
+        try:
+            self._panel.close()
+        except Exception:
+            pass
+        self._panel = None
+        self._word = None
+        self._callback = None
+        self._progress = None
+        self._count_label = None
+        self._countdown = 5
+        if callback and word:
+            callback(word, confirmed)
+
+    def dismiss_if_active(self):
+        """Dismiss without confirming (e.g., when recording starts)."""
+        if self._panel:
+            self._dismiss(confirmed=False)
+
+
 # ── App ───────────────────────────────────────────────────────────
 
 
@@ -646,6 +904,10 @@ class VoiceInputApp(rumps.App):
         self._watchdog_fired = False
         self._polisher = TextPolisher()
         self._text_polish = self._settings.get("text_polish", True)
+        self._dict_guard = DictionaryGuard()
+        self._last_ax_inserted = None  # (text, ax_element_ref, field_value_after)
+        self._correction_timer = None
+        self._pending_dict_popup = None  # word to show in popup
         self._MAX_HISTORY = 30
         self._history = self._settings.get("history", [])[:self._MAX_HISTORY]
 
@@ -905,6 +1167,15 @@ class VoiceInputApp(rumps.App):
         # ── Apply icon effect based on state (unified state machine) ──
         visual = self.state.visual
         self._apply_effect(visual)
+
+        # Dictionary popup management
+        popup = DictionaryPopup.shared()
+        if popup._panel:
+            popup.tick_main_thread()
+        if self._pending_dict_popup:
+            word = self._pending_dict_popup
+            self._pending_dict_popup = None
+            popup.show(word, self._on_dict_popup_done)
 
         # [BUG-13] Rebuild history menu on main thread
         if getattr(self, "_history_dirty", False):
@@ -1457,6 +1728,9 @@ class VoiceInputApp(rumps.App):
 
     def _cleanup_resources(self):
         """Release all resources for restart or shutdown."""
+        DictionaryPopup.shared().dismiss_if_active()
+        if self._correction_timer:
+            self._correction_timer.cancel()
         self._cancel_timer()
 
         if self._keyboard_listener:
@@ -1614,6 +1888,7 @@ class VoiceInputApp(rumps.App):
     # ── Recording ─────────────────────────────────────────────
 
     def _start_rec(self):
+        DictionaryPopup.shared().dismiss_if_active()
         self._resolve_mic()
         self.audio_frames = []
         self._rec_start_time = time.time()
@@ -1984,6 +2259,10 @@ class VoiceInputApp(rumps.App):
             log.error("Text insertion failed: %s", e, exc_info=True)
             notify("VoiceInk", "Could not type text — try clicking a text field first")
 
+        # Schedule correction detection (AX tier only)
+        if self._last_ax_inserted:
+            self._schedule_correction_check()
+
     def _try_ax_insert(self, text):
         """Insert text via Accessibility API. Returns True if ACTUALLY successful.
         Some apps (Chrome web content) return success but silently ignore the write.
@@ -2036,6 +2315,11 @@ class VoiceInputApp(rumps.App):
                     log.debug("AX write silently ignored, falling back")
                     return False
 
+            # Capture for correction detection
+            try:
+                self._last_ax_inserted = (text, focused, str(val_after) if err_after == 0 else None)
+            except Exception:
+                self._last_ax_inserted = None
             return True
         except Exception:
             return False
@@ -2098,6 +2382,140 @@ class VoiceInputApp(rumps.App):
             pb.clearContents()
             for t, d in old_data.items():
                 pb.setData_forType_(d, t)
+
+    # ── Correction detection & dictionary learning ─────────────
+
+    def _schedule_correction_check(self):
+        """Schedule a 2.5s delayed check for user corrections after AX insertion."""
+        if self._correction_timer:
+            self._correction_timer.cancel()
+        snapshot = self._last_ax_inserted
+        if not snapshot:
+            return
+        self._correction_timer = threading.Timer(2.5, self._check_correction, args=(snapshot,))
+        self._correction_timer.daemon = True
+        self._correction_timer.start()
+
+    def _check_correction(self, snapshot):
+        """Read back the AX field and detect corrections."""
+        try:
+            inserted_text, ax_element, old_value = snapshot
+            if not ax_element or not old_value:
+                return
+
+            from ApplicationServices import AXUIElementCopyAttributeValue
+            err, current = AXUIElementCopyAttributeValue(ax_element, "AXValue", None)
+            if err != 0 or current is None:
+                return
+            current = str(current)
+            if current == old_value:
+                return  # No change
+
+            # Find our inserted text in old_value
+            idx = old_value.find(inserted_text)
+            if idx == -1:
+                return
+            prefix = old_value[:idx]
+            suffix = old_value[idx + len(inserted_text):]
+
+            # Extract corresponding region from current value
+            if suffix:
+                if current.startswith(prefix) and current.endswith(suffix):
+                    corrected = current[len(prefix):-len(suffix)]
+                else:
+                    return
+            else:
+                if current.startswith(prefix):
+                    corrected = current[len(prefix):]
+                else:
+                    return
+
+            if not corrected or corrected == inserted_text:
+                return
+
+            log.info("Correction detected: '%s' -> '%s'", inserted_text, corrected)
+            self._evaluate_correction(inserted_text, corrected)
+        except Exception as e:
+            log.debug("Correction check failed: %s", e)
+
+    def _evaluate_correction(self, original, corrected):
+        """Evaluate a correction for dictionary-worthiness."""
+        # Extract the key different word
+        import difflib
+        orig_words = original.split()
+        corr_words = corrected.split()
+        matcher = difflib.SequenceMatcher(None, orig_words, corr_words)
+        new_words = []
+        for tag, i1, i2, j1, j2 in matcher.get_opcodes():
+            if tag in ('replace', 'insert'):
+                new_words.extend(corr_words[j1:j2])
+        if not new_words:
+            return
+
+        # Pick the best candidate
+        candidates = [w for w in new_words if len(w) >= 2]
+        special = [w for w in candidates if any(c.isupper() for c in w) or not w.isascii()]
+        word = (special[0] if special else candidates[0]) if candidates else None
+        if not word:
+            return
+
+        # Anti-spam check
+        if not self._dict_guard.should_prompt(word, self.dictionary):
+            log.debug("Dict guard rejected '%s'", word)
+            return
+
+        # LLM classification
+        if not self._polisher._loaded:
+            return
+        vocab = self.dictionary.get("vocabulary", [])
+        should_add, llm_word = self._polisher.classify_correction(original, corrected, vocab)
+        if not should_add:
+            log.info("LLM says NO for '%s'", word)
+            return
+
+        final_word = llm_word or word
+        if not self._dict_guard.should_prompt(final_word, self.dictionary):
+            return
+
+        log.info("Queuing dictionary popup for '%s'", final_word)
+        self._pending_dict_popup = final_word
+
+    def _add_to_dictionary(self, word):
+        """Add a word to dictionary.json with atomic write."""
+        try:
+            import tempfile as _tf
+            dictionary = json.loads(DICT_PATH.read_text()) if DICT_PATH.exists() else {"vocabulary": []}
+            vocab = dictionary.get("vocabulary", [])
+            if word.lower() in {w.lower() for w in vocab}:
+                return
+            vocab.append(word)
+            dictionary["vocabulary"] = vocab
+            tmp_fd, tmp_path = _tf.mkstemp(dir=str(DICT_PATH.parent), suffix='.tmp')
+            try:
+                with os.fdopen(tmp_fd, 'w') as f:
+                    json.dump(dictionary, f, indent=2, ensure_ascii=False)
+                    f.write('\n')
+                os.replace(tmp_path, str(DICT_PATH))
+            except Exception:
+                try:
+                    os.unlink(tmp_path)
+                except OSError:
+                    pass
+                raise
+            log.info("Dictionary: added '%s' (%d total)", word, len(vocab))
+        except Exception as e:
+            log.error("Failed to add to dictionary: %s", e)
+
+    def _on_dict_popup_done(self, word, confirmed):
+        """Callback when dictionary popup finishes."""
+        if confirmed:
+            log.info("Dictionary: adding '%s' (countdown completed)", word)
+            self._dict_guard.record_add()
+            threading.Thread(target=self._add_to_dictionary, args=(word,), daemon=True).start()
+            notify("VoiceInk", f"Added '{word}' to dictionary")
+        else:
+            log.info("Dictionary: user dismissed '%s'", word)
+            self._dict_guard.record_reject(word)
 
     # ── Key events (state machine) ────────────────────────────
 
