@@ -24,6 +24,34 @@ func isCleanTerm(_ word: String) -> Bool {
         return false
     }
 
+    // Reject embedded digits: letter-digit-letter pattern (OCR substitution like Ba8h)
+    let chars = Array(word)
+    for i in 1..<(chars.count - 1) {
+        if chars[i].isNumber && chars[i-1].isLetter && chars[i+1].isLetter {
+            return false
+        }
+    }
+
+    // Reject scattered digits in otherwise alphabetic terms
+    let digitPositions = chars.indices.filter { chars[$0].isNumber }
+    if digitPositions.count > 1 {
+        let contiguous = zip(digitPositions, digitPositions.dropFirst()).allSatisfy { $1 == $0 + 1 }
+        if !contiguous { return false }
+    }
+
+    // Reject random case zigzag (base64-like: AAQAT9bPvJQ)
+    let lettersOnly = chars.filter { $0.isLetter }
+    if lettersOnly.count >= 6 {
+        var zigzags = 0
+        for i in 2..<lettersOnly.count {
+            if lettersOnly[i].isUppercase != lettersOnly[i-1].isUppercase &&
+               lettersOnly[i-1].isUppercase != lettersOnly[i-2].isUppercase {
+                zigzags += 1
+            }
+        }
+        if zigzags >= 3 { return false }
+    }
+
     // [BUG-7] Allow short alphanumeric terms (GPT4, M1, H100)
     let digits = word.filter { $0.isNumber }
     let letters = word.filter { $0.isLetter }

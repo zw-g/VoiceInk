@@ -547,6 +547,8 @@ def ocr_cgimage(cg_image):
             return ""
         lines = []
         for obs in request.results():
+            if obs.confidence() < 0.5:
+                continue
             candidates = obs.topCandidates_(1)
             if candidates:
                 lines.append(candidates[0].string())
@@ -1671,7 +1673,7 @@ class VoiceInputApp(rumps.App):
                 # Quality gate — reject garbage from OCR
                 if len(key) < 2 or len(key) > 25:
                     continue
-                if sum(1 for c in key if c.isdigit()) > len(key) * 0.3:
+                if len(key) > 6 and sum(1 for c in key if c.isdigit()) > len(key) * 0.3:
                     continue
                 # Reject terms starting with digits, punctuation, or special chars
                 if not key[0].isalpha():
