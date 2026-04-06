@@ -8,8 +8,6 @@ Tests pure functions that don't require rumps, audio, or AX API:
 
 Run:
     cd ~/.local/voice-input
-    .venv-py2app/bin/python -m pytest test_voice_input.py -v
-    # or without pytest:
     .venv-py2app/bin/python -m unittest test_voice_input -v
 """
 

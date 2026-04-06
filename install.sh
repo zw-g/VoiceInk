@@ -54,7 +54,7 @@ for f in voice_input.py itn.py text_polisher.py dictionary_ui.py test_voice_inpu
         cp "$SCRIPT_DIR/$f" "$INSTALL_DIR/"
     fi
 done
-chmod +x "$INSTALL_DIR/start.sh" "$INSTALL_DIR/stop.sh"
+chmod +x "$INSTALL_DIR/start.sh" "$INSTALL_DIR/stop.sh" "$INSTALL_DIR/uninstall.sh"
 
 # Create default dictionary if not exists
 if [[ ! -f "$INSTALL_DIR/dictionary.json" ]]; then
