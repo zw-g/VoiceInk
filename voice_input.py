@@ -18,7 +18,13 @@ import re
 import subprocess
 import threading
 import time
+import warnings
 from pathlib import Path
+
+# Suppress multiprocessing resource_tracker warnings about leaked semaphores.
+# This is a known issue with MLX/multiprocessing — the semaphores are cleaned
+# up by the OS on process exit, but the tracker warns unnecessarily.
+warnings.filterwarnings("ignore", message="resource_tracker.*semaphore", category=UserWarning)
 
 import numpy as np
 import rumps
@@ -538,7 +544,7 @@ def capture_screens():
                         wid,
                         Quartz.kCGWindowImageBoundsIgnoreFraming,
                     )
-                    if img:
+                    if img and Quartz.CGImageGetWidth(img) > 0 and Quartz.CGImageGetHeight(img) > 0:
                         images.append(img)
                 break
 
@@ -558,7 +564,7 @@ def capture_screens():
                 Quartz.kCGNullWindowID,
                 Quartz.kCGWindowImageDefault,
             )
-            if img:
+            if img and Quartz.CGImageGetWidth(img) > 0 and Quartz.CGImageGetHeight(img) > 0:
                 images.append(img)
 
         return images
