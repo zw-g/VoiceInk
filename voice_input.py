@@ -301,7 +301,7 @@ class TextPolisher:
             self._loaded = True
             log.info("Text polish model loaded")
         except Exception as e:
-            log.warning("Text polish model failed to load: %s", e)
+            log.warning("Text polish model failed to load: %s", e, exc_info=True)
             self._loaded = False
 
     def polish(self, text):
@@ -332,7 +332,7 @@ class TextPolisher:
                 return text
             return clean
         except Exception as e:
-            log.warning("Text polish failed: %s", e)
+            log.warning("Text polish failed: %s", e, exc_info=True)
             return text
 
 
@@ -356,7 +356,7 @@ def load_settings():
         try:
             settings = json.loads(SETTINGS_PATH.read_text())
         except Exception as e:
-            log.warning("Failed to parse settings.json (using defaults): %s", e)
+            log.warning("Failed to parse settings.json (using defaults): %s", e, exc_info=True)
     # [P5-3] Apply config overrides
     MODEL = settings.get("model", _DEFAULTS["model"])
     SAMPLE_RATE = settings.get("sample_rate", _DEFAULTS["sample_rate"])
@@ -372,7 +372,7 @@ def save_settings(settings):
     try:
         SETTINGS_PATH.write_text(json.dumps(settings, indent=2, ensure_ascii=False) + "\n")
     except Exception as e:
-        log.warning("Failed to save settings: %s", e)
+        log.warning("Failed to save settings: %s", e, exc_info=True)
 
 
 def load_dictionary(path):
@@ -380,7 +380,7 @@ def load_dictionary(path):
         try:
             return json.loads(path.read_text())
         except Exception as e:
-            log.warning("Bad dictionary file: %s", e)
+            log.warning("Bad dictionary file: %s", e, exc_info=True)
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(DEFAULT_DICT, indent=2, ensure_ascii=False) + "\n")
     return dict(DEFAULT_DICT)
@@ -475,7 +475,7 @@ def capture_screens():
 
         return images
     except Exception as e:
-        log.warning("Screen capture failed: %s", e)
+        log.warning("Screen capture failed: %s", e, exc_info=True)
         return []
 
 
@@ -500,7 +500,7 @@ def ocr_cgimage(cg_image):
                 lines.append(candidates[0].string())
         return "\n".join(lines)
     except Exception as e:
-        log.warning("OCR failed: %s", e)
+        log.warning("OCR failed: %s", e, exc_info=True)
         return ""
 
 
@@ -893,7 +893,7 @@ class VoiceInputApp(rumps.App):
                 self.session = Session(model=MODEL)
             log.info("Model loaded")
         except Exception as e:
-            log.error("Model load failed: %s", e)
+            log.error("Model load failed: %s", e, exc_info=True)
             notify("VoiceInk", f"Model failed: {e}")
             # [P1-3] UI update via main thread is best-effort here
             self.status_item.title = "Model failed"
@@ -927,7 +927,7 @@ class VoiceInputApp(rumps.App):
                 self._keyboard_listener = None
                 log.warning("Keyboard listener exited")
             except Exception as e:
-                log.error("Keyboard listener died: %s", e)
+                log.error("Keyboard listener died: %s", e, exc_info=True)
             notify("VoiceInk", "Keyboard listener lost — restarting in 3s")
             self.status_item.title = "Listener error"
             self.state = State.ERROR  # [AUDIT-13]
@@ -966,7 +966,7 @@ class VoiceInputApp(rumps.App):
             log.info("VoiceInk is up to date (%s)", local_sha[:8])
             return False
         except Exception as e:
-            log.warning("Update check failed: %s", e)
+            log.warning("Update check failed: %s", e, exc_info=True)
             return False
 
     def _perform_update(self):
@@ -1047,7 +1047,7 @@ class VoiceInputApp(rumps.App):
             os.execv(python, [python, script])
 
         except Exception as e:
-            log.error("Update failed: %s", e)
+            log.error("Update failed: %s", e, exc_info=True)
             notify("VoiceInk", f"Update failed: {e}")
             return False
 
@@ -1110,7 +1110,7 @@ class VoiceInputApp(rumps.App):
             else:
                 log.info("Accessibility permission: granted")
         except Exception as e:
-            log.warning("Could not check Accessibility permission: %s", e)
+            log.warning("Could not check Accessibility permission: %s", e, exc_info=True)
 
         # [BUG-3] Use CGPreflightScreenCaptureAccess (macOS 10.15.4+)
         if _HAS_VISION:
@@ -1299,7 +1299,7 @@ class VoiceInputApp(rumps.App):
             )
             self.stream.start()
         except Exception as e:
-            log.error("Mic open failed: %s", e)
+            log.error("Mic open failed: %s", e, exc_info=True)
             notify("VoiceInk", f"Microphone error: {e}\nCheck System Settings > Privacy > Microphone")
             play_sound("Basso")
             self.state = State.IDLE
@@ -1339,7 +1339,7 @@ class VoiceInputApp(rumps.App):
                 self.stream.stop()
                 self.stream.close()
             except Exception as e:
-                log.warning("Stream close error: %s", e)
+                log.warning("Stream close error: %s", e, exc_info=True)
             self.stream = None
         self._rec_start_time = 0.0
         self.state = State.PROCESSING
@@ -1364,7 +1364,7 @@ class VoiceInputApp(rumps.App):
             log.info("Screen OCR: %d chars", len(self.screen_text))
         except Exception as e:
             self.screen_text = ""
-            log.warning("Screen capture failed: %s", e)
+            log.warning("Screen capture failed: %s", e, exc_info=True)
         finally:
             self._ocr_done.set()  # [P2-2] signal completion
 
@@ -1404,7 +1404,7 @@ class VoiceInputApp(rumps.App):
             log.info("NER daemon started (PID %d)", self._ner_proc.pid)
             return True
         except Exception as e:
-            log.warning("NER daemon start failed: %s", e)
+            log.warning("NER daemon start failed: %s", e, exc_info=True)
         if self._ner_proc:
             try:
                 self._ner_proc.terminate()
@@ -1466,7 +1466,7 @@ class VoiceInputApp(rumps.App):
                             self._ner_last_success = time.monotonic()
                         return results
                 except Exception as e:
-                    log.warning("NER daemon call failed: %s", e)
+                    log.warning("NER daemon call failed: %s", e, exc_info=True)
                     self._ner_proc = None
 
         # Fallback to one-shot subprocess
@@ -1484,7 +1484,7 @@ class VoiceInputApp(rumps.App):
                     w.strip() for w in result.stdout.strip().split("\n") if w.strip()
                 ]
         except Exception as e:
-            log.warning("NER extraction failed: %s", e)
+            log.warning("NER extraction failed: %s", e, exc_info=True)
         return []
 
     # Context limit: hallucination is caused by garbage terms, not quantity.
@@ -1586,7 +1586,7 @@ class VoiceInputApp(rumps.App):
             self._add_to_history(text)
             self._type_text(text)
         except Exception as e:
-            log.error("Transcription error: %s", e)
+            log.error("Transcription error: %s", e, exc_info=True)
             notify("VoiceInk", f"Error: {e}")
             play_sound("Basso")  # [P4-2] error feedback
         finally:
@@ -1742,7 +1742,7 @@ class VoiceInputApp(rumps.App):
                 try:
                     self._stop_rec_and_transcribe()
                 except Exception as e:
-                    log.error("Stop recording failed: %s", e)
+                    log.error("Stop recording failed: %s", e, exc_info=True)
                     self.state = State.IDLE
 
     # [P1-2] All state transitions wrapped in try/except
@@ -1781,7 +1781,7 @@ class VoiceInputApp(rumps.App):
                     self.status_item.title = "Ready"
                     self._stop_rec_and_transcribe()
             except Exception as e:
-                log.error("Key press handler failed: %s", e)
+                log.error("Key press handler failed: %s", e, exc_info=True)
                 self.state = State.IDLE
 
     def _on_release(self, key):
@@ -1802,7 +1802,7 @@ class VoiceInputApp(rumps.App):
                         self.state = State.IDLE
                         self._stop_rec_and_transcribe()
             except Exception as e:
-                log.error("Key release handler failed: %s", e)
+                log.error("Key release handler failed: %s", e, exc_info=True)
                 self.state = State.IDLE
 
 
