@@ -1022,7 +1022,9 @@ class VoiceInputApp(rumps.App):
                                  if os.path.isdir(os.path.join(tmp_dir, d))]
                     if extracted:
                         src_dir = os.path.join(tmp_dir, extracted[0])
-                        for f in ["voice_input.py", "ner_daemon.swift", "ner_tool.swift",
+                        for f in ["voice_input.py", "itn.py", "text_polisher.py",
+                                  "dictionary_ui.py", "test_voice_input.py",
+                                  "ner_daemon.swift", "ner_tool.swift",
                                   "install.sh", "start.sh", "stop.sh", "uninstall.sh",
                                   "requirements.txt", "VERSION", "README.md",
                                   "VoiceInk.icns", "icon_light.png", "icon_dark.png", "icon_glow.png"]:

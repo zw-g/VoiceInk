@@ -98,6 +98,15 @@ def _needs_polish(text):
     # English filler words
     if re.search(r'\bum\b|\buh\b|\bso basically\b', text, re.IGNORECASE):
         return True
+    # "like" / "you know" as fillers (with surrounding commas or at start)
+    if re.search(r',\s*like,|, you know,|^like ', text, re.IGNORECASE):
+        return True
+    # English ordinals
+    if re.search(r'\b(first|second|third|fourth|fifth|sixth|seventh|eighth|ninth|tenth|eleventh|twelfth|thirteenth|twentieth|thirtieth)\b', text, re.IGNORECASE):
+        return True
+    # Chinese time patterns (e.g., 两点半, 三点十五)
+    if re.search(r'[一二三四五六七八九十两]+点[半一二三四五六七八九十]*', text):
+        return True
     # Unconverted Chinese number words (百分之, 零点, or consecutive number characters)
     if re.search(r'百分之|零点|[一二三四五六七八九十百千万亿]{2,}', text):
         return True
