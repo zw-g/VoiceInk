@@ -731,6 +731,8 @@ class VoiceInputApp(rumps.App):
         # Track source file mtime for code-change detection (#10)
         self._startup_mtime = os.path.getmtime(os.path.abspath(__file__))
         self._periodic_tick = 0
+        self._restart_menu_item = None  # Dynamic "Restart to Update" menu item
+        self._update_downloaded = False  # Set by background auto-update thread
 
         # Sleep/wake observer
         self._sleeping = False
@@ -980,15 +982,37 @@ class VoiceInputApp(rumps.App):
 
             threading.Thread(target=_refresh_devices, daemon=True).start()
 
+        # Show restart menu item when background auto-update has downloaded
+        if getattr(self, '_update_downloaded', False) and self._restart_menu_item is None:
+            self._update_downloaded = False
+            self._restart_notified = True
+            self._restart_menu_item = rumps.MenuItem(
+                "\u26a0\ufe0f Restart to Update", callback=self._restart_to_update
+            )
+            keys = list(self.menu.keys())
+            if keys:
+                self.menu.insert_before(keys[0], self._restart_menu_item)
+            self._pending_status_title = "Update ready"
+            notify("VoiceInk", "Update ready \u2014 click 'Restart to Update' in menu bar")
+            log.info("Update downloaded, restart menu item added")
+
         # Detect code changes on disk (~every 10s, not every tick)
         self._periodic_tick += 1
         if self._periodic_tick % 10 == 0 and not getattr(self, '_restart_notified', False):
             try:
                 if os.path.getmtime(os.path.abspath(__file__)) > self._startup_mtime:
                     self._restart_notified = True
-                    notify("VoiceInk", "Code updated on disk. Restart to apply changes.")
-                    self._pending_status_title = "Restart needed"
                     log.info("Code changed on disk, restart needed")
+                    if self._restart_menu_item is None:
+                        self._restart_menu_item = rumps.MenuItem(
+                            "\u26a0\ufe0f Restart to Update", callback=self._restart_to_update
+                        )
+                        # Insert at top of menu
+                        keys = list(self.menu.keys())
+                        if keys:
+                            self.menu.insert_before(keys[0], self._restart_menu_item)
+                    self._pending_status_title = "Update ready"
+                    notify("VoiceInk", "Code updated \u2014 click 'Restart to Update' in menu bar")
             except OSError:
                 pass
 
@@ -1068,7 +1092,12 @@ class VoiceInputApp(rumps.App):
 
         self.state = State.IDLE
         self.status_item.title = "Ready"
-        notify("VoiceInk", "Ready — use right Option key")
+        if os.environ.pop("VOICEINK_RESTARTED", None):
+            local_ver = (self._INSTALL_DIR / "VERSION").read_text().strip() if (self._INSTALL_DIR / "VERSION").exists() else "unknown"
+            notify("VoiceInk", f"Updated to v{local_ver} — ready")
+            log.info("Post-restart: running updated code v%s", local_ver)
+        else:
+            notify("VoiceInk", "Ready — use right Option key")
 
         # [P1-1] Keyboard listener auto-restart loop
         restart_delay = 3
@@ -1127,19 +1156,12 @@ class VoiceInputApp(rumps.App):
             log.warning("Update check failed: %s", e, exc_info=True)
             return False
 
-    def _perform_update(self):
-        """Pull latest code, recompile NER tools, and restart.
-
-        Uses git pull as fast path for git-clone installs, with tarball
-        download as universal fallback for non-git installs.
-        """
+    def _download_update(self):
+        """Download and compile update without restarting. Returns True on success."""
         try:
             import urllib.request
+            log.info("Downloading update...")
 
-            log.info("Updating VoiceInk...")
-            notify("VoiceInk", "Updating... will restart shortly")
-
-            # Try git pull first (fast path for git-clone installs)
             has_git = (self._INSTALL_DIR / ".git").exists()
             if has_git:
                 result = subprocess.run(
@@ -1154,11 +1176,7 @@ class VoiceInputApp(rumps.App):
                     has_git = False
 
             if not has_git:
-                # Tarball fallback for non-git installs
-                import shutil
-                import tarfile
-                import tempfile
-
+                import shutil, tarfile, tempfile
                 url = f"https://api.github.com/repos/{self._REPO}/tarball/main"
                 tmp_dir = tempfile.mkdtemp()
                 try:
@@ -1166,12 +1184,10 @@ class VoiceInputApp(rumps.App):
                     urllib.request.urlretrieve(url, tar_path)
                     with tarfile.open(tar_path) as tar:
                         tar.extractall(tmp_dir, filter='data')
-                    # Find extracted directory (GitHub names it repo-sha/)
                     extracted = [d for d in os.listdir(tmp_dir)
                                  if os.path.isdir(os.path.join(tmp_dir, d))]
                     if extracted:
                         src_dir = os.path.join(tmp_dir, extracted[0])
-                        # Copy updated files (preserve user data like settings, dictionary)
                         for f in ["voice_input.py", "ner_daemon.swift", "ner_tool.swift",
                                   "install.sh", "start.sh", "stop.sh", "uninstall.sh",
                                   "requirements.txt", "VERSION", "README.md"]:
@@ -1181,76 +1197,49 @@ class VoiceInputApp(rumps.App):
                                 tmp = dst + ".tmp"
                                 shutil.copy2(src, tmp)
                                 os.replace(tmp, dst)
-                        log.info("Updated from tarball")
+                    log.info("Updated from tarball")
                 finally:
                     shutil.rmtree(tmp_dir, ignore_errors=True)
 
-            # Update Python dependencies
             venv_pip = self._INSTALL_DIR / ".venv-py2app" / "bin" / "pip"
             req_file = self._INSTALL_DIR / "requirements.txt"
             if venv_pip.exists() and req_file.exists():
                 r = subprocess.run(
                     [str(venv_pip), "install", "-q", "-r", str(req_file)],
-                    capture_output=True,
-                    text=True,
-                    timeout=120,
+                    capture_output=True, text=True, timeout=120,
                 )
                 if r.returncode != 0:
                     log.warning("pip install failed: %s", r.stderr[:200] if r.stderr else "")
                 else:
                     log.info("Python dependencies updated")
 
-            # Recompile NER tools
-            for src in ["ner_tool.swift", "ner_daemon.swift"]:
-                name = src.replace(".swift", "")
+            for src_file in ["ner_tool.swift", "ner_daemon.swift"]:
+                name = src_file.replace(".swift", "")
                 r = subprocess.run(
                     ["swiftc", "-O", "-o", str(self._INSTALL_DIR / name),
-                     str(self._INSTALL_DIR / src)],
-                    capture_output=True,
-                    timeout=60,
+                     str(self._INSTALL_DIR / src_file)],
+                    capture_output=True, timeout=60,
                 )
                 if r.returncode != 0:
-                    log.error("swiftc failed for %s: %s", src, r.stderr[:200] if r.stderr else "")
-                    notify("VoiceInk", f"Update failed: {src} compilation error")
+                    log.error("swiftc failed for %s: %s", src_file, r.stderr[:200] if r.stderr else "")
                     return False
-            log.info("NER tools recompiled")
-
-            # Comprehensive resource cleanup before execv
-            self._cleanup_resources()
-
-            log.info("Restarting VoiceInk...")
-            notify("VoiceInk", "Updated! Restarting...")
-            time.sleep(1)
-
-            # Close all log handlers
-            for handler in list(log.handlers):
-                try:
-                    handler.flush()
-                    handler.close()
-                except Exception:
-                    pass
-
-            # Close ALL file descriptors >= 3 to prevent leaks into new process
-            try:
-                max_fd = os.sysconf("SC_OPEN_MAX")
-            except (ValueError, OSError):
-                max_fd = 1024
-            os.closerange(3, max_fd)
-
-            import sys
-            python = sys.executable
-            script = str(self._INSTALL_DIR / "voice_input.py")
-            os.execv(python, [python, script])
-
+            log.info("Update downloaded and compiled successfully")
+            return True
         except Exception as e:
-            # Log handlers may be closed after cleanup, use stderr as fallback
-            import sys as _sys
-            try:
-                log.error("Update failed: %s", e, exc_info=True)
-            except Exception:
-                print(f"Update failed: {e}", file=_sys.stderr)
-            notify("VoiceInk", f"Update failed: {e}")
+            log.warning("Update download failed: %s", e, exc_info=True)
             return False
+
+    def _perform_update(self):
+        """Pull latest code, recompile NER tools, and restart."""
+        try:
+            notify("VoiceInk", "Updating... will restart shortly")
+            if self._download_update():
+                self._do_restart()
+            else:
+                notify("VoiceInk", "Update failed \u2014 check log for details")
+        except Exception as e:
+            log.error("Update failed: %s", e, exc_info=True)
+            notify("VoiceInk", f"Update failed: {e}")
 
     def _manual_update(self, _):
         """Menu: Check for Updates clicked."""
@@ -1263,12 +1252,15 @@ class VoiceInputApp(rumps.App):
             notify("VoiceInk", "Already up to date")
 
     def _auto_update_check(self):
-        """Background auto-update: check and notify (don't restart mid-use)."""
+        """Background auto-update: download silently, show restart menu item."""
         time.sleep(10)
         if self._check_for_update():
-            # [AUDIT-9] Don't auto-restart — notify user and let them choose
-            log.info("Update available — notifying user")
-            notify("VoiceInk", "Update available! Click 'Check for Updates' to apply.")
+            log.info("Update available — downloading silently")
+            if self._download_update():
+                self._update_downloaded = True
+                log.info("Update downloaded — waiting for user to restart")
+            else:
+                notify("VoiceInk", "Update available but download failed.")
 
     def _toggle_auto_update(self, sender):
         self._auto_update = not self._auto_update
@@ -1523,6 +1515,53 @@ class VoiceInputApp(rumps.App):
                 pass
 
         self.state = State.IDLE
+
+    def _restart_to_update(self, _):
+        """Menu callback: restart to apply update."""
+        threading.Thread(target=self._do_restart, daemon=True).start()
+
+    def _do_restart(self):
+        """Clean restart: wait for transcription, cleanup, execv."""
+        # Wait for in-progress transcription (up to 30s)
+        if self.state == State.PROCESSING:
+            log.info("Restart: waiting for transcription to finish...")
+            self._pending_status_title = "Restarting after transcription..."
+            deadline = time.monotonic() + 30
+            while self.state == State.PROCESSING and time.monotonic() < deadline:
+                time.sleep(0.5)
+
+        # Cancel any active recording
+        with self.lock:
+            if self.state in (State.RECORDING_HOLD, State.RECORDING_TOGGLE,
+                              State.WAITING_DOUBLE_CLICK):
+                self._cancel_timer()
+                self._cancel_rec()
+                self.state = State.IDLE
+
+        log.info("Restarting VoiceInk (user-triggered)...")
+        notify("VoiceInk", "Restarting...")
+        os.environ["VOICEINK_RESTARTED"] = "1"
+
+        self._cleanup_resources()
+        time.sleep(0.5)
+
+        for handler in list(log.handlers):
+            try:
+                handler.flush()
+                handler.close()
+            except Exception:
+                pass
+
+        try:
+            max_fd = os.sysconf("SC_OPEN_MAX")
+        except (ValueError, OSError):
+            max_fd = 1024
+        os.closerange(3, max_fd)
+
+        import sys as _sys
+        python = _sys.executable
+        script = str(self._INSTALL_DIR / "voice_input.py")
+        os.execv(python, [python, script])
 
     # [P1-5] Graceful shutdown
     def _quit(self, _):
