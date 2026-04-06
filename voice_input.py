@@ -1529,7 +1529,7 @@ class VoiceInputApp(rumps.App):
                 if not key[0].isalpha():
                     continue
                 # Reject terms with non-alphanumeric chars (OCR artifacts)
-                if any(c not in "abcdefghijklmnopqrstuvwxyz0123456789 -'" for c in key):
+                if any(not (c.isalpha() or c.isdigit() or c in " -'") for c in key):
                     continue
                 if key not in terms:
                     terms[key] = w
