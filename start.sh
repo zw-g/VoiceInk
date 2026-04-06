@@ -10,9 +10,8 @@ if [[ ! -f "$PLIST" ]]; then
     exit 1
 fi
 
-# Stop any existing instance (both LaunchAgent and rogue processes)
+# Stop any existing instance via LaunchAgent
 launchctl bootout "gui/$(id -u)/$LABEL" 2>/dev/null
-pkill -f voice_input.py 2>/dev/null
 sleep 1
 
 # Load and start via LaunchAgent (proper permissions, single instance)
