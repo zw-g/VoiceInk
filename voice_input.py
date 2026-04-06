@@ -1737,8 +1737,13 @@ class VoiceInputApp(rumps.App):
                         reader.start()
                         if not read_done.wait(timeout=5.0):
                             log.warning("NER daemon readline timed out")
-                            self._ner_proc.terminate()
+                            try:
+                                self._ner_proc.terminate()
+                                self._ner_proc.wait(timeout=2)
+                            except Exception:
+                                pass
                             self._ner_proc = None
+                            reader.join(timeout=2)  # Clean up the reader thread
                             return []
                         if results:
                             self._ner_last_success = time.monotonic()
@@ -2016,7 +2021,7 @@ class VoiceInputApp(rumps.App):
         self.kb.tap("v")
         self.kb.release(keyboard.Key.cmd)
 
-        time.sleep(0.5)
+        time.sleep(0.2)
         if old_data:
             pb.clearContents()
             for t, d in old_data.items():
