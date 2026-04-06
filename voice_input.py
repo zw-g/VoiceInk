@@ -89,6 +89,16 @@ if not _sys.stdout.isatty():
     _sys.stdout = open(os.devnull, 'w')
     _sys.stderr = open(os.devnull, 'w')
 
+# Route unhandled thread exceptions to the log (stderr is now /dev/null)
+import threading as _threading
+
+def _thread_excepthook(args):
+    log.error("Unhandled exception in thread %s: %s",
+              args.thread.name if args.thread else "?", args.exc_value,
+              exc_info=(args.exc_type, args.exc_value, args.exc_traceback))
+
+_threading.excepthook = _thread_excepthook
+
 
 # ── State ─────────────────────────────────────────────────────────
 
@@ -1505,14 +1515,20 @@ class VoiceInputApp(rumps.App):
 
             for src_file in ["ner_tool.swift", "ner_daemon.swift"]:
                 name = src_file.replace(".swift", "")
+                tmp_out = str(self._INSTALL_DIR / name) + ".new"
                 r = subprocess.run(
-                    ["swiftc", "-O", "-o", str(self._INSTALL_DIR / name),
+                    ["swiftc", "-O", "-o", tmp_out,
                      str(self._INSTALL_DIR / src_file)],
                     capture_output=True, timeout=60,
                 )
                 if r.returncode != 0:
                     log.error("swiftc failed for %s: %s", src_file, r.stderr[:200] if r.stderr else "")
+                    try:
+                        os.unlink(tmp_out)
+                    except OSError:
+                        pass
                     return False
+                os.replace(tmp_out, str(self._INSTALL_DIR / name))
             log.info("Update downloaded and compiled successfully")
             return True
         except Exception as e:
@@ -1867,15 +1883,16 @@ class VoiceInputApp(rumps.App):
     # ── Sleep/Wake handling ───────────────────────────────────
 
     def _on_will_sleep(self):
-        """Pre-sleep: save active recording, close stream."""
+        """Pre-sleep: cancel active recording (don't transcribe — thread would be killed by sleep)."""
         log.info("System will sleep")
         self._sleeping = True
         with self.lock:
             if self.state in (State.RECORDING_HOLD, State.RECORDING_TOGGLE,
                               State.WAITING_DOUBLE_CLICK):
                 self._cancel_timer()
-                log.info("Sleep: stopping recording (state=%s)", self.state.name)
-                self._stop_rec_and_transcribe()
+                log.info("Sleep: cancelling recording (state=%s)", self.state.name)
+                self._cancel_rec()
+                self.state = State.IDLE
 
     def _on_wake(self):
         """Post-wake: refresh audio devices after hardware re-enumerates."""
@@ -2429,7 +2446,7 @@ class VoiceInputApp(rumps.App):
                 return  # No change
 
             # Find our inserted text in old_value
-            idx = old_value.find(inserted_text)
+            idx = old_value.rfind(inserted_text)
             if idx == -1:
                 return
             prefix = old_value[:idx]
@@ -2445,6 +2462,9 @@ class VoiceInputApp(rumps.App):
                 if current.startswith(prefix):
                     corrected = current[len(prefix):]
                 else:
+                    return
+                # Filter out continuation typing: user kept typing after insertion
+                if corrected.startswith(inserted_text) and len(corrected) > len(inserted_text):
                     return
 
             if not corrected or corrected == inserted_text:
