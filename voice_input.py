@@ -946,6 +946,17 @@ class VoiceInputApp(rumps.App):
             self.state = State.ERROR  # [AUDIT-13] Show error icon
             return
 
+        # Prevent macOS App Nap throttling
+        try:
+            from Foundation import NSProcessInfo
+            self._activity = NSProcessInfo.processInfo().beginActivityWithOptions_reason_(
+                0x00FFFFFF,  # NSActivityUserInitiatedAllowingIdleSystemSleep
+                "VoiceInk needs real-time keyboard monitoring and audio processing"
+            )
+            log.info("App Nap prevention enabled")
+        except Exception as e:
+            log.warning("App Nap prevention failed: %s", e, exc_info=True)
+
         self._start_ner_daemon()
         self._check_permissions()
 
