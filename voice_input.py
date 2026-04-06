@@ -1851,6 +1851,13 @@ class VoiceInputApp(rumps.App):
         notify("VoiceInk", "Restarting...")
         os.environ["VOICEINK_RESTARTED"] = "1"
 
+        # [#55] Wind down NSApplication before cleanup to prevent
+        # 'quit unexpectedly' dialog on os.execv restart.
+        try:
+            rumps.quit_application()
+        except Exception:
+            pass
+
         self._cleanup_resources()
         time.sleep(0.5)
 

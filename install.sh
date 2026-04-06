@@ -138,10 +138,6 @@ cat > "$PLIST" << PLISTEOF
         <key>PATH</key>
         <string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
     </dict>
-    <key>StandardOutPath</key>
-    <string>$INSTALL_DIR/voice_input.log</string>
-    <key>StandardErrorPath</key>
-    <string>$INSTALL_DIR/voice_input.log</string>
 </dict>
 </plist>
 PLISTEOF
