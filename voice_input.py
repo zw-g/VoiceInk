@@ -924,6 +924,12 @@ class VoiceInputApp(rumps.App):
     # ── Setup ─────────────────────────────────────────────────
 
     def _setup(self):
+        # Start polish model loading in parallel with ASR model
+        polish_thread = None
+        if self._text_polish:
+            polish_thread = threading.Thread(target=self._polisher.load, daemon=True)
+            polish_thread.start()
+
         # [P1-7] Model load failure handling
         try:
             log.info("Loading model %s", MODEL)
@@ -946,10 +952,6 @@ class VoiceInputApp(rumps.App):
         # [P5-5] Auto-update check (non-blocking)
         if self._auto_update:
             threading.Thread(target=self._auto_update_check, daemon=True).start()
-
-        # Load text polish model (non-blocking — app is usable without it)
-        if self._text_polish:
-            self._polisher.load()
 
         self.state = State.IDLE
         self.status_item.title = "Ready"
