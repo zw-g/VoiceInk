@@ -495,6 +495,7 @@ class VoiceInputApp(rumps.App):
         self._watchdog_fired = False
         self._polisher = TextPolisher()
         self._text_polish = self._settings.get("text_polish", True)
+        self._auto_dictionary = self._settings.get("auto_dictionary", True)
         self._dict_guard = DictionaryGuard()
         self._last_ax_inserted = None  # (text, ax_element_ref, field_value_after)
         self._correction_timer = None
@@ -545,6 +546,9 @@ class VoiceInputApp(rumps.App):
         self.polish_item = rumps.MenuItem("Text Polish (AI)", callback=self._toggle_polish)
         self.polish_item.state = self._text_polish
 
+        self.auto_dict_item = rumps.MenuItem("Auto-Dictionary", callback=self._toggle_auto_dict)
+        self.auto_dict_item.state = self._auto_dictionary
+
         self.history_menu = rumps.MenuItem("Recent Transcriptions")
         self._rebuild_history_menu()
 
@@ -563,6 +567,7 @@ class VoiceInputApp(rumps.App):
             self.hotkey_menu,
             self.ctx_item,
             self.polish_item,
+            self.auto_dict_item,
             rumps.MenuItem("Edit Dictionary", callback=self._edit_dict),
             None,
             rumps.MenuItem("Check for Updates", callback=self._manual_update),
@@ -764,7 +769,7 @@ class VoiceInputApp(rumps.App):
         popup = DictionaryPopup.shared()
         if popup._panel:
             popup.tick_main_thread()
-        if self._pending_dict_popup and self.state == State.IDLE:
+        if self._auto_dictionary and self._pending_dict_popup and self.state == State.IDLE:
             word = self._pending_dict_popup
             self._pending_dict_popup = None
             popup.show(word, self._on_dict_popup_done)
@@ -1179,6 +1184,13 @@ class VoiceInputApp(rumps.App):
         if self._text_polish and not self._polisher._loaded:
             threading.Thread(target=self._polisher.load, daemon=True).start()
 
+    def _toggle_auto_dict(self, sender):
+        self._auto_dictionary = not self._auto_dictionary
+        sender.state = self._auto_dictionary
+        self._settings["auto_dictionary"] = self._auto_dictionary
+        self._save_settings()
+        log.info("Auto-Dictionary: %s", "enabled" if self._auto_dictionary else "disabled")
+
     # ── Permission checks [P4-1] ─────────────────────────────
 
     def _check_permissions(self):
@@ -1342,6 +1354,7 @@ class VoiceInputApp(rumps.App):
             "hotkey": self._settings.get("hotkey", DEFAULT_HOTKEY),
             "auto_update": self._auto_update,
             "text_polish": self._text_polish,
+            "auto_dictionary": self._auto_dictionary,
             "history": self._history[:self._MAX_HISTORY],
         })
         save_settings(self._settings)
@@ -1858,7 +1871,7 @@ class VoiceInputApp(rumps.App):
                 # Tier 1: AX insertion (instant, no clipboard, ~8ms)
                 if self._try_ax_insert(text):
                     log.info("Typed %d chars via AX API", len(text))
-                    if self._last_ax_inserted:
+                    if self._auto_dictionary and self._last_ax_inserted:
                         self._schedule_correction_check()
                     return
                 # Tier 2: CGEvent keyboard synthesis (no clipboard, universal, ~3ms/20chars)
@@ -1866,10 +1879,18 @@ class VoiceInputApp(rumps.App):
                 if len(text) <= 200:
                     self._type_via_cgevent(text)
                     log.info("Typed %d chars via CGEvent", len(text))
+                    if self._auto_dictionary:
+                        time.sleep(0.05)
+                        if self._try_snapshot_ax_field(text):
+                            self._schedule_correction_check()
                     return
                 # Tier 3: Clipboard paste (long text only)
                 self._clipboard_paste(text)
                 log.info("Typed %d chars via clipboard paste", len(text))
+                if self._auto_dictionary:
+                    time.sleep(0.1)
+                    if self._try_snapshot_ax_field(text):
+                        self._schedule_correction_check()
         except Exception as e:
             log.error("Text insertion failed: %s", e, exc_info=True)
             notify("VoiceInk", "Could not type text — try clicking a text field first")
@@ -1933,6 +1954,40 @@ class VoiceInputApp(rumps.App):
                 self._last_ax_inserted = None
             return True
         except Exception:
+            return False
+
+    def _try_snapshot_ax_field(self, inserted_text):
+        """Read-only AX query to capture field value after CGEvent/clipboard insertion.
+        Many apps support AX read even when AX write fails.
+        Returns True on success, False on failure.
+        """
+        try:
+            from ApplicationServices import (
+                AXUIElementCreateApplication,
+                AXUIElementCopyAttributeValue,
+            )
+            from AppKit import NSWorkspace
+
+            ws = NSWorkspace.sharedWorkspace()
+            app = ws.frontmostApplication()
+            app_elem = AXUIElementCreateApplication(app.processIdentifier())
+            err, focused = AXUIElementCopyAttributeValue(
+                app_elem, "AXFocusedUIElement", None
+            )
+            if err != 0 or focused is None:
+                log.debug("AX snapshot: no focused element")
+                return False
+
+            err, value = AXUIElementCopyAttributeValue(focused, "AXValue", None)
+            if err != 0 or value is None:
+                log.debug("AX snapshot: cannot read AXValue")
+                return False
+
+            self._last_ax_inserted = (inserted_text, focused, str(value))
+            log.debug("AX snapshot captured (%d chars in field)", len(str(value)))
+            return True
+        except Exception:
+            log.debug("AX snapshot failed", exc_info=True)
             return False
 
     def _type_via_cgevent(self, text, delay=0.003):
