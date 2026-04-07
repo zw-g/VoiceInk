@@ -628,6 +628,7 @@ class VoiceInputApp(rumps.App):
         self._stream_text = ""
         self._stream_hud_dirty = False
         self._stream_feeder_stop = None
+        self._stream_feeder_thread = None
         self._dict_guard = DictionaryGuard()
         self._last_ax_inserted = None  # (text, ax_element_ref, field_value_after)
         self._correction_timer = None
@@ -1596,6 +1597,9 @@ class VoiceInputApp(rumps.App):
         StreamingHUD.shared().dismiss()
         if self._stream_feeder_stop:
             self._stream_feeder_stop.set()
+        if self._stream_feeder_thread:
+            self._stream_feeder_thread.join(timeout=2.0)
+            self._stream_feeder_thread = None
         self._stream_state = None
         if self._correction_timer:
             self._correction_timer.cancel()
@@ -1809,9 +1813,10 @@ class VoiceInputApp(rumps.App):
                 self._stream_text = ""
                 self._stream_hud_dirty = True
                 self._stream_feeder_stop = threading.Event()
-                threading.Thread(
+                self._stream_feeder_thread = threading.Thread(
                     target=self._stream_feeder, daemon=True
-                ).start()
+                )
+                self._stream_feeder_thread.start()
             except Exception as e:
                 log.warning("Streaming init failed: %s", e)
                 self._stream_state = None
@@ -1820,6 +1825,9 @@ class VoiceInputApp(rumps.App):
     def _cancel_rec(self):
         if self._stream_feeder_stop:
             self._stream_feeder_stop.set()
+        if self._stream_feeder_thread:
+            self._stream_feeder_thread.join(timeout=2.0)
+            self._stream_feeder_thread = None
         self._stream_state = None
         self._stream_text = ""
         self._stream_hud_dirty = True
@@ -1841,6 +1849,9 @@ class VoiceInputApp(rumps.App):
         # Stop streaming feeder before transcription
         if self._stream_feeder_stop:
             self._stream_feeder_stop.set()
+        if self._stream_feeder_thread:
+            self._stream_feeder_thread.join(timeout=2.0)
+            self._stream_feeder_thread = None
         # [P1-2] Crash protection
         if self.stream:
             try:
