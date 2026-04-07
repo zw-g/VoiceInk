@@ -43,6 +43,7 @@ from voice_input import (
     save_settings,
     DEFAULT_DICT,
     SETTINGS_PATH,
+    State,
 )
 from text_polisher import TextPolisher
 
@@ -579,6 +580,172 @@ class TestSettingsRoundTrip(unittest.TestCase):
             self.assertEqual(reloaded["stats"]["today_words"], 42)
             self.assertEqual(reloaded["stats"]["total_recordings"], 200)
             self.assertEqual(reloaded["history"], ["hello world", "test recording"])
+
+
+# ── State machine transition tests ───────────────────────────────
+
+
+class TestStateMachine(unittest.TestCase):
+    """Verify the State enum and its transition table.
+
+    The valid transitions are documented in the State docstring in
+    voice_input.py.  We encode them as a data structure and verify
+    completeness, correctness, and the enum members themselves.
+    """
+
+    # Canonical transition table extracted from the State docstring.
+    # Maps each state to the set of states it can transition to.
+    VALID_TRANSITIONS = {
+        State.LOADING: {State.IDLE},
+        State.IDLE: {State.RECORDING_HOLD, State.WAITING_DOUBLE_CLICK},
+        State.RECORDING_HOLD: {State.PROCESSING, State.IDLE},
+        State.WAITING_DOUBLE_CLICK: {State.RECORDING_TOGGLE, State.PROCESSING, State.IDLE},
+        State.RECORDING_TOGGLE: {State.PROCESSING, State.IDLE},
+        State.PROCESSING: {State.IDLE, State.ERROR},
+        State.ERROR: {State.IDLE},
+    }
+
+    # ── Enum membership tests ──────────────────────────────────────
+
+    def test_state_count(self):
+        """State enum has exactly 7 members."""
+        self.assertEqual(len(State), 7)
+
+    def test_expected_members(self):
+        """All expected state names are present."""
+        expected = {
+            "LOADING", "IDLE", "RECORDING_HOLD",
+            "WAITING_DOUBLE_CLICK", "RECORDING_TOGGLE",
+            "PROCESSING", "ERROR",
+        }
+        actual = {s.name for s in State}
+        self.assertEqual(actual, expected)
+
+    def test_values_are_lowercase(self):
+        """Every State value is a lowercase string matching its name."""
+        for s in State:
+            self.assertEqual(s.value, s.name.lower())
+
+    # ── Transition table completeness ──────────────────────────────
+
+    def test_every_state_has_transitions(self):
+        """Every state in the enum appears as a key in the transition table."""
+        for s in State:
+            self.assertIn(s, self.VALID_TRANSITIONS,
+                          f"{s.name} missing from VALID_TRANSITIONS")
+
+    def test_transition_targets_are_valid_states(self):
+        """Every target in the transition table is a valid State member."""
+        for src, targets in self.VALID_TRANSITIONS.items():
+            for tgt in targets:
+                self.assertIsInstance(tgt, State,
+                                     f"Invalid target {tgt!r} from {src.name}")
+
+    def test_no_self_transitions(self):
+        """No state should transition to itself."""
+        for src, targets in self.VALID_TRANSITIONS.items():
+            self.assertNotIn(src, targets,
+                             f"{src.name} has a self-transition")
+
+    # ── Specific transition tests ──────────────────────────────────
+
+    def test_loading_transitions(self):
+        """LOADING can only go to IDLE."""
+        self.assertEqual(self.VALID_TRANSITIONS[State.LOADING], {State.IDLE})
+
+    def test_idle_transitions(self):
+        """IDLE goes to RECORDING_HOLD or WAITING_DOUBLE_CLICK."""
+        self.assertEqual(
+            self.VALID_TRANSITIONS[State.IDLE],
+            {State.RECORDING_HOLD, State.WAITING_DOUBLE_CLICK},
+        )
+
+    def test_recording_hold_transitions(self):
+        """RECORDING_HOLD goes to PROCESSING or IDLE (cancel)."""
+        self.assertEqual(
+            self.VALID_TRANSITIONS[State.RECORDING_HOLD],
+            {State.PROCESSING, State.IDLE},
+        )
+
+    def test_waiting_double_click_transitions(self):
+        """WAITING_DOUBLE_CLICK goes to RECORDING_TOGGLE, PROCESSING, or IDLE."""
+        self.assertEqual(
+            self.VALID_TRANSITIONS[State.WAITING_DOUBLE_CLICK],
+            {State.RECORDING_TOGGLE, State.PROCESSING, State.IDLE},
+        )
+
+    def test_recording_toggle_transitions(self):
+        """RECORDING_TOGGLE goes to PROCESSING or IDLE (cancel)."""
+        self.assertEqual(
+            self.VALID_TRANSITIONS[State.RECORDING_TOGGLE],
+            {State.PROCESSING, State.IDLE},
+        )
+
+    def test_processing_transitions(self):
+        """PROCESSING goes to IDLE (success) or ERROR (failure)."""
+        self.assertEqual(
+            self.VALID_TRANSITIONS[State.PROCESSING],
+            {State.IDLE, State.ERROR},
+        )
+
+    def test_error_transitions(self):
+        """ERROR recovers to IDLE."""
+        self.assertEqual(self.VALID_TRANSITIONS[State.ERROR], {State.IDLE})
+
+    # ── Reachability ───────────────────────────────────────────────
+
+    def test_all_states_reachable_from_loading(self):
+        """Every state is reachable from LOADING via valid transitions."""
+        visited = set()
+        queue = [State.LOADING]
+        while queue:
+            current = queue.pop()
+            if current in visited:
+                continue
+            visited.add(current)
+            queue.extend(self.VALID_TRANSITIONS.get(current, set()))
+        self.assertEqual(visited, set(State),
+                         f"Unreachable states: {set(State) - visited}")
+
+    def test_idle_reachable_from_every_state(self):
+        """IDLE is reachable from every state (always possible to recover)."""
+        for start in State:
+            visited = set()
+            queue = [start]
+            while queue:
+                current = queue.pop()
+                if current in visited:
+                    continue
+                visited.add(current)
+                queue.extend(self.VALID_TRANSITIONS.get(current, set()))
+            self.assertIn(State.IDLE, visited,
+                          f"IDLE not reachable from {start.name}")
+
+    # ── Visual property tests ──────────────────────────────────────
+
+    def test_visual_recording_states(self):
+        """Recording states map to 'recording' visual."""
+        for s in (State.RECORDING_HOLD, State.WAITING_DOUBLE_CLICK, State.RECORDING_TOGGLE):
+            self.assertEqual(s.visual, "recording", f"{s.name}.visual")
+
+    def test_visual_processing(self):
+        self.assertEqual(State.PROCESSING.visual, "processing")
+
+    def test_visual_idle(self):
+        self.assertEqual(State.IDLE.visual, "idle")
+
+    def test_visual_error(self):
+        self.assertEqual(State.ERROR.visual, "error")
+
+    def test_visual_loading(self):
+        self.assertEqual(State.LOADING.visual, "loading")
+
+    def test_every_state_has_visual(self):
+        """Every state returns a non-empty visual string."""
+        for s in State:
+            v = s.visual
+            self.assertIsInstance(v, str, f"{s.name}.visual is not str")
+            self.assertTrue(len(v) > 0, f"{s.name}.visual is empty")
 
 
 if __name__ == "__main__":
