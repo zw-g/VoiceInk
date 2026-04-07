@@ -226,7 +226,7 @@ class TextPolisher:
             clean = re.sub(r"<think>.*", "", clean, flags=re.DOTALL).strip()
 
             # Safety: if output is empty or wildly different length, use original
-            if not clean or len(clean) < len(text) * 0.3 or len(clean) > len(text) * 2:
+            if not clean or len(clean) < len(text) * 0.15 or len(clean) > len(text) * 2:
                 log.warning("Text polish output rejected (len %d→%d), using original", len(text), len(clean))
                 return text
             return clean
