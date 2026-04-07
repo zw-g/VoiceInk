@@ -2115,13 +2115,15 @@ class VoiceInputApp(rumps.App):
 
     def _transcribe(self, frames):
         if not frames:
-            self.state = State.IDLE
+            with self.lock:
+                self.state = State.IDLE
             return
         audio = np.concatenate(frames).flatten()  # [BUG-6] Ensure 1D array for ASR
         duration = len(audio) / SAMPLE_RATE
         if duration < 0.3:
             log.info("Audio too short (%.1fs), skipped", duration)
-            self.state = State.IDLE
+            with self.lock:
+                self.state = State.IDLE
             play_sound("Funk")  # [P4-2] no-speech feedback
             return
 
@@ -2174,7 +2176,8 @@ class VoiceInputApp(rumps.App):
             self._stream_state = None
             self._stream_text = ""
             self._stream_hud_dirty = True
-            self.state = State.IDLE
+            with self.lock:
+                self.state = State.IDLE
             self._pending_status_title = "Ready"
 
     def _type_text(self, text):
