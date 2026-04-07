@@ -614,6 +614,24 @@ class VoiceInputApp(rumps.App):
         self._MAX_HISTORY = 30
         self._history = self._settings.get("history", [])[:self._MAX_HISTORY]
 
+        # Usage statistics (local, privacy-preserving)
+        import datetime as _dt
+        today_str = _dt.date.today().isoformat()
+        saved_stats = self._settings.get("stats", {})
+        if saved_stats.get("today") != today_str:
+            # Day rollover — reset daily counters
+            saved_stats["today"] = today_str
+            saved_stats["today_words"] = 0
+            saved_stats["today_recordings"] = 0
+        self._stats = {
+            "today": saved_stats.get("today", today_str),
+            "today_words": saved_stats.get("today_words", 0),
+            "today_recordings": saved_stats.get("today_recordings", 0),
+            "total_words": saved_stats.get("total_words", 0),
+            "total_recordings": saved_stats.get("total_recordings", 0),
+        }
+        self._stats_dirty = True  # Ensure initial menu text is set
+
         # [P4-4] Configurable hotkey
         # [BUG-16] Validate hotkey name and log warning on fallback
         hotkey_name = self._settings.get("hotkey", DEFAULT_HOTKEY)
@@ -663,6 +681,9 @@ class VoiceInputApp(rumps.App):
         self.stream_item = rumps.MenuItem("Streaming Preview", callback=self._toggle_streaming)
         self.stream_item.state = self._streaming
 
+        self.stats_menu = rumps.MenuItem("Statistics")
+        self._rebuild_stats_menu()
+
         self.history_menu = rumps.MenuItem("Recent Transcriptions")
         self._rebuild_history_menu()
 
@@ -677,6 +698,7 @@ class VoiceInputApp(rumps.App):
             self.status_item,
             None,
             self.history_menu,
+            self.stats_menu,
             self.mic_menu,
             self.hotkey_menu,
             self.ctx_item,
@@ -906,6 +928,11 @@ class VoiceInputApp(rumps.App):
         if getattr(self, "_history_dirty", False):
             self._rebuild_history_menu()
             self._history_dirty = False
+
+        # Update statistics submenu when dirty
+        if getattr(self, "_stats_dirty", False):
+            self._rebuild_stats_menu()
+            self._stats_dirty = False
 
         # Rebuild mic menu on main thread (triggered by background device refresh)
         if getattr(self, "_mic_menu_dirty", False):
@@ -1415,6 +1442,40 @@ class VoiceInputApp(rumps.App):
         log.info("Launch at Login: %s", "enabled" if not current else "disabled")
 
     # [P4-3] Transcription history — persisted, click to copy
+    def _update_stats(self, word_count):
+        """Increment usage statistics after a successful transcription."""
+        import datetime as _dt
+        today_str = _dt.date.today().isoformat()
+        # Day rollover — reset daily counters
+        if self._stats.get("today") != today_str:
+            self._stats["today"] = today_str
+            self._stats["today_words"] = 0
+            self._stats["today_recordings"] = 0
+        self._stats["today_words"] += word_count
+        self._stats["today_recordings"] += 1
+        self._stats["total_words"] += word_count
+        self._stats["total_recordings"] += 1
+        self._stats_dirty = True
+        log.info("Stats: +%d words, today=%d/%d, total=%d/%d",
+                 word_count,
+                 self._stats["today_words"], self._stats["today_recordings"],
+                 self._stats["total_words"], self._stats["total_recordings"])
+
+    def _rebuild_stats_menu(self):
+        """Rebuild the Statistics submenu with current counts."""
+        try:
+            self.stats_menu.clear()
+        except AttributeError:
+            pass
+        tw = self._stats.get("today_words", 0)
+        tr = self._stats.get("today_recordings", 0)
+        aw = self._stats.get("total_words", 0)
+        ar = self._stats.get("total_recordings", 0)
+        today_item = rumps.MenuItem(f"Today: {tw:,} words ({tr:,} recordings)")
+        total_item = rumps.MenuItem(f"All time: {aw:,} words ({ar:,} recordings)")
+        self.stats_menu[today_item.title] = today_item
+        self.stats_menu[total_item.title] = total_item
+
     def _add_to_history(self, text):
         self._history.insert(0, text)
         if len(self._history) > self._MAX_HISTORY:
@@ -1495,6 +1556,7 @@ class VoiceInputApp(rumps.App):
             "auto_dictionary": self._auto_dictionary,
             "streaming": self._streaming,
             "history": self._history[:self._MAX_HISTORY],
+            "stats": self._stats,
         })
         save_settings(self._settings)
 
@@ -2048,6 +2110,7 @@ class VoiceInputApp(rumps.App):
             else:
                 log.info("Result: %s", text)
             self._add_to_history(text)
+            self._update_stats(len(text.split()))
             self._type_text(text)
         except Exception as e:
             log.error("Transcription error: %s", e, exc_info=True)
