@@ -467,15 +467,17 @@ def _is_valid_context_term(term):
 class StreamingHUD:
     """Floating translucent panel showing interim streaming transcription text.
 
-    Singleton via shared(). All UI methods (show, update_text, dismiss) MUST
-    be called on the main thread (from _periodic).
+    Singleton via shared(). Creates one panel per connected monitor so the
+    HUD is visible regardless of which screen the user is looking at.
+    All UI methods (show, update_text, dismiss) MUST be called on the main
+    thread (from _periodic).
     """
 
     _instance = None
 
     def __init__(self):
-        self._panel = None
-        self._label = None
+        self._panels = []  # One NSPanel per screen
+        self._labels = []  # One NSTextField per panel
 
     @classmethod
     def shared(cls):
@@ -484,8 +486,8 @@ class StreamingHUD:
         return cls._instance
 
     def show(self):
-        """Create and display the HUD panel. MUST be called on main thread."""
-        if self._panel:
+        """Create and display HUD panels on every monitor. MUST be called on main thread."""
+        if self._panels:
             return
         try:
             from AppKit import (
@@ -493,78 +495,84 @@ class StreamingHUD:
                 NSTextField, NSBackingStoreBuffered, NSVisualEffectView,
             )
 
-            W, H = 500, 48
-            screen = NSScreen.mainScreen()
-            if not screen:
+            screens = NSScreen.screens()
+            if not screens:
                 return
-            sx = screen.frame().size.width
-            x = (sx - W) / 2
-            y = 80
 
-            panel = NSPanel.alloc().initWithContentRect_styleMask_backing_defer_(
-                NSMakeRect(x, y, W, H),
-                128,  # NSWindowStyleMaskNonactivatingPanel
-                NSBackingStoreBuffered,
-                False,
-            )
-            panel.setLevel_(3)  # NSFloatingWindowLevel
-            panel.setCollectionBehavior_(1 | 256)  # CanJoinAllSpaces | FullScreenAuxiliary
-            panel.setOpaque_(False)
-            panel.setBackgroundColor_(NSColor.clearColor())
-            panel.setHasShadow_(True)
-            panel.setAlphaValue_(0.0)
-            panel.setHidesOnDeactivate_(False)
-            panel.setFloatingPanel_(True)
+            W, H = 500, 48
 
-            # HUD background
-            content = NSVisualEffectView.alloc().initWithFrame_(NSMakeRect(0, 0, W, H))
-            content.setMaterial_(13)  # HUDWindow
-            content.setBlendingMode_(1)  # BehindWindow
-            content.setState_(1)  # Active
-            content.setWantsLayer_(True)
-            content.layer().setCornerRadius_(12.0)
-            content.layer().setMasksToBounds_(True)
-            panel.setContentView_(content)
+            for screen in screens:
+                # Position at bottom-center of each screen's visible frame
+                vf = screen.visibleFrame()
+                x = vf.origin.x + (vf.size.width - W) / 2
+                y = vf.origin.y + 80
 
-            # Text label
-            label = NSTextField.labelWithString_("")
-            label.setFrame_(NSMakeRect(16, 14, W - 32, 20))
-            label.setFont_(NSFont.systemFontOfSize_(13.0))
-            label.setTextColor_(NSColor.whiteColor())
-            label.setLineBreakMode_(5)  # NSLineBreakByTruncatingHead
-            content.addSubview_(label)
-            self._label = label
+                panel = NSPanel.alloc().initWithContentRect_styleMask_backing_defer_(
+                    NSMakeRect(x, y, W, H),
+                    128,  # NSWindowStyleMaskNonactivatingPanel
+                    NSBackingStoreBuffered,
+                    False,
+                )
+                panel.setLevel_(3)  # NSFloatingWindowLevel
+                panel.setCollectionBehavior_(1 | 256)  # CanJoinAllSpaces | FullScreenAuxiliary
+                panel.setOpaque_(False)
+                panel.setBackgroundColor_(NSColor.clearColor())
+                panel.setHasShadow_(True)
+                panel.setAlphaValue_(0.0)
+                panel.setHidesOnDeactivate_(False)
+                panel.setFloatingPanel_(True)
 
-            self._panel = panel
-            panel.orderFrontRegardless()
-            panel.setAlphaValue_(0.92)
+                # HUD background
+                content = NSVisualEffectView.alloc().initWithFrame_(NSMakeRect(0, 0, W, H))
+                content.setMaterial_(13)  # HUDWindow
+                content.setBlendingMode_(1)  # BehindWindow
+                content.setState_(1)  # Active
+                content.setWantsLayer_(True)
+                content.layer().setCornerRadius_(12.0)
+                content.layer().setMasksToBounds_(True)
+                panel.setContentView_(content)
+
+                # Text label
+                label = NSTextField.labelWithString_("")
+                label.setFrame_(NSMakeRect(16, 14, W - 32, 20))
+                label.setFont_(NSFont.systemFontOfSize_(13.0))
+                label.setTextColor_(NSColor.whiteColor())
+                label.setLineBreakMode_(5)  # NSLineBreakByTruncatingHead
+                content.addSubview_(label)
+                self._labels.append(label)
+
+                panel.orderFrontRegardless()
+                panel.setAlphaValue_(0.92)
+                self._panels.append(panel)
 
         except Exception as e:
             log.warning("StreamingHUD show failed: %s", e)
-            self._panel = None
-            self._label = None
+            self._panels = []
+            self._labels = []
 
     def update_text(self, text):
-        """Update displayed text. Truncates long text from the left."""
-        if not self._label:
+        """Update displayed text on all panels. Truncates long text from the left."""
+        if not self._labels:
             return
         if len(text) > 77:
             text = "..." + text[-74:]
-        try:
-            self._label.setStringValue_(text)
-        except Exception:
-            pass
+        for label in self._labels:
+            try:
+                label.setStringValue_(text)
+            except Exception:
+                pass
 
     def dismiss(self):
-        """Close the HUD panel. MUST be called on main thread."""
-        if not self._panel:
+        """Close all HUD panels. MUST be called on main thread."""
+        if not self._panels:
             return
-        try:
-            self._panel.close()
-        except Exception:
-            pass
-        self._panel = None
-        self._label = None
+        for panel in self._panels:
+            try:
+                panel.close()
+            except Exception:
+                pass
+        self._panels = []
+        self._labels = []
 
 
 # ── App ───────────────────────────────────────────────────────────
@@ -928,12 +936,12 @@ class VoiceInputApp(rumps.App):
         if self._streaming:
             hud = StreamingHUD.shared()
             if self.state in (State.RECORDING_HOLD, State.RECORDING_TOGGLE) and self._stream_text:
-                if not hud._panel:
+                if not hud._panels:
                     hud.show()
                 if self._stream_hud_dirty:
                     self._stream_hud_dirty = False
                     hud.update_text(self._stream_text)
-            elif hud._panel:
+            elif hud._panels:
                 hud.dismiss()
                 self._stream_hud_dirty = False
 
