@@ -131,9 +131,18 @@ Edit `~/.local/voice-input/settings.json`:
   "auto_update": true,
   "model": "Qwen/Qwen3-ASR-1.7B",
   "ocr_languages": ["en", "zh-Hans", "zh-Hant"],
+  "symbol": "waveform",
+  "double_click_window": 0.35,
+  "max_recording_secs": 1800,
   "stats": {"today": "", "today_words": 0, "today_recordings": 0, "total_words": 0, "total_recordings": 0}
 }
 ```
+
+| Setting | Description |
+|---|---|
+| `symbol` | Menu bar icon style: `"waveform"` (default), `"mic"`, or `"dot"` |
+| `double_click_window` | Seconds between taps to trigger toggle mode (default `0.35`) |
+| `max_recording_secs` | Maximum recording duration in seconds (default `1800` = 30 min) |
 
 Hotkey options: `alt_r`, `alt_l`, `cmd_r`, `ctrl_r`, `f18`, `f19`, `f20`
 

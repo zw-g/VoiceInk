@@ -60,7 +60,10 @@ Example 5: Hello, how are you today?
 Output 5: Hello, how are you today?
 
 Example 6: 三心二意不能成事
-Output 6: 三心二意不能成事"""
+Output 6: 三心二意不能成事
+
+Example 7: um the meeting is on March twenty first at two pm
+Output 7: The meeting is on March 21st at 2 PM"""
 
 _DICT_CLASSIFY_PROMPT = (
     "You classify voice transcription corrections. Given the ASR output and "
@@ -88,6 +91,7 @@ _DICT_CLASSIFY_PROMPT = (
     '- ASR: "非常命的" -> User: "非常mean的" => YES mean\n'
     '- ASR: "好的哈" -> User: "好的ha" => NO (common interjection)\n'
     '- ASR: "我要看你" -> User: "我要看repo" => YES repo\n'
+    '- ASR: "I like the desine" -> User: "I like the design" => NO\n'
 )
 
 

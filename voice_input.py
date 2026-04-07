@@ -1251,7 +1251,7 @@ class VoiceInputApp(rumps.App):
                                   "dictionary_ui.py", "test_voice_input.py",
                                   "ner_daemon.swift", "ner_tool.swift",
                                   "install.sh", "start.sh", "stop.sh", "uninstall.sh",
-                                  "requirements.txt", "VERSION", "README.md",
+                                  "status.sh", "requirements.txt", "VERSION", "README.md",
                                   "VoiceInk.icns", "icon_light.png", "icon_dark.png", "icon_glow.png"]:
                             src = os.path.join(src_dir, f)
                             if os.path.exists(src):
@@ -1260,7 +1260,7 @@ class VoiceInputApp(rumps.App):
                                 shutil.copy2(src, tmp)
                                 os.replace(tmp, dst)
                         # Ensure shell scripts are executable after tarball extraction
-                        for sh in ["start.sh", "stop.sh", "uninstall.sh"]:
+                        for sh in ["start.sh", "stop.sh", "uninstall.sh", "status.sh"]:
                             sh_path = str(self._INSTALL_DIR / sh)
                             if os.path.exists(sh_path):
                                 os.chmod(sh_path, 0o755)
@@ -1772,7 +1772,7 @@ class VoiceInputApp(rumps.App):
             self.stream.start()
         except Exception as e:
             log.error("Mic open failed: %s", e, exc_info=True)
-            notify("VoiceInk", f"Microphone error: {e}\nCheck System Settings > Privacy > Microphone")
+            notify("VoiceInk", "Microphone error — check System Settings > Privacy > Microphone")
             play_sound("Basso")
             self.state = State.IDLE
             return
@@ -1791,8 +1791,10 @@ class VoiceInputApp(rumps.App):
         # Start streaming preview if enabled
         if self._streaming and self.session:
             try:
+                vocab = self.dictionary.get("vocabulary", [])
+                stream_context = " ".join(vocab) if vocab else ""
                 self._stream_state = self.session.init_streaming(
-                    context="",
+                    context=stream_context,
                     chunk_size_sec=1.0,
                 )
                 self._stream_text = ""

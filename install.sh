@@ -49,12 +49,12 @@ mkdir -p "$INSTALL_DIR"
 
 # Copy source files
 echo "Copying files..."
-for f in voice_input.py itn.py text_polisher.py dictionary_ui.py test_voice_input.py ner_daemon.swift ner_tool.swift start.sh stop.sh uninstall.sh requirements.txt VERSION VoiceInk.icns icon_light.png icon_dark.png icon_glow.png; do
+for f in voice_input.py itn.py text_polisher.py dictionary_ui.py test_voice_input.py ner_daemon.swift ner_tool.swift start.sh stop.sh uninstall.sh status.sh requirements.txt VERSION VoiceInk.icns icon_light.png icon_dark.png icon_glow.png; do
     if [[ -f "$SCRIPT_DIR/$f" ]]; then
         cp "$SCRIPT_DIR/$f" "$INSTALL_DIR/"
     fi
 done
-chmod +x "$INSTALL_DIR/start.sh" "$INSTALL_DIR/stop.sh" "$INSTALL_DIR/uninstall.sh"
+chmod +x "$INSTALL_DIR/start.sh" "$INSTALL_DIR/stop.sh" "$INSTALL_DIR/uninstall.sh" "$INSTALL_DIR/status.sh"
 
 # Create default dictionary if not exists
 if [[ ! -f "$INSTALL_DIR/dictionary.json" ]]; then
@@ -145,10 +145,14 @@ PLISTEOF
 # Copy .app to /Applications (optional — may need sudo)
 echo "Installing VoiceInk.app..."
 if [[ -d "$SCRIPT_DIR/VoiceInk.app" ]]; then
-    sudo rm -rf /Applications/VoiceInk.app 2>/dev/null || true
+    if [[ -d /Applications/VoiceInk.app && ! -L /Applications/VoiceInk.app ]]; then
+        sudo rm -rf /Applications/VoiceInk.app 2>/dev/null || true
+    fi
     sudo cp -R "$SCRIPT_DIR/VoiceInk.app" /Applications/ 2>/dev/null || echo "  Skipped (no sudo). You can manually copy VoiceInk.app to /Applications/."
 elif [[ -d "$INSTALL_DIR/VoiceInk.app" ]]; then
-    sudo rm -rf /Applications/VoiceInk.app 2>/dev/null || true
+    if [[ -d /Applications/VoiceInk.app && ! -L /Applications/VoiceInk.app ]]; then
+        sudo rm -rf /Applications/VoiceInk.app 2>/dev/null || true
+    fi
     sudo cp -R "$INSTALL_DIR/VoiceInk.app" /Applications/ 2>/dev/null || echo "  Skipped (no sudo)."
 fi
 
