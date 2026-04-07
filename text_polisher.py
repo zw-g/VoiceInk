@@ -85,6 +85,21 @@ _DICT_CLASSIFY_PROMPT = (
 )
 
 
+# Pre-compiled regex patterns for _needs_polish (avoid re-compiling on every call)
+_RE_MATH_CN = re.compile(r'大于等于|小于等于|不等于|大于|小于|等于|乘以|除以')
+_RE_MATH_EN = re.compile(r'\b(greater than|less than|equals|squared|divided by)\b', re.IGNORECASE)
+_RE_FILLER_FINAL = re.compile(r'啊[，。？！\s]|啊$|对吧|是吧')
+_RE_FILLER_CN = re.compile(r'呃|嗯|就是说|然后呢|那个')
+_RE_FILLER_EN = re.compile(r'\bum\b|\buh\b|\bso basically\b', re.IGNORECASE)
+_RE_FILLER_LIKE = re.compile(r',\s*like,|, you know,|^like ', re.IGNORECASE)
+_RE_ORDINAL = re.compile(r'\b(first|second|third|fourth|fifth|sixth|seventh|eighth|ninth|tenth|eleventh|twelfth|thirteenth|twentieth|thirtieth)\b', re.IGNORECASE)
+_RE_TIME_CN = re.compile(r'[一二三四五六七八九十两]+点[半一二三四五六七八九十]*')
+_RE_NUM_CN = re.compile(r'百分之|零点|[一二三四五六七八九十百千万亿]{2,}')
+_RE_NUM_EN = re.compile(r'\b(thirty|forty|fifty|sixty|seventy|eighty|ninety|hundred|thousand|million|billion)\b', re.IGNORECASE)
+_RE_CURRENCY = re.compile(r'块|元|美元|dollars?|bucks|cents?|公里|公斤|米|pounds?|miles?|kilometers?', re.IGNORECASE)
+_RE_NO_PUNCT = re.compile(r'[.,!?;:，。！？；：]')
+
+
 def _needs_polish(text):
     """Quick heuristic: does this text need LLM polishing?
 
@@ -93,44 +108,44 @@ def _needs_polish(text):
     """
     # Unconverted math expressions (Chinese) — check before length gate
     # so short expressions like "大于" still get polished
-    if re.search(r'大于等于|小于等于|不等于|大于|小于|等于|乘以|除以', text):
+    if _RE_MATH_CN.search(text):
         return True
     # Unconverted math expressions (English)
-    if re.search(r'\b(greater than|less than|equals|squared|divided by)\b', text, re.IGNORECASE):
+    if _RE_MATH_EN.search(text):
         return True
     # Chinese sentence-final fillers / tag questions — check before length gate
     # so short phrases like "你说对吧" still get polished
-    if re.search(r'啊[，。？！\s]|啊$|对吧|是吧', text):
+    if _RE_FILLER_FINAL.search(text):
         return True
     # Very short text — not worth the LLM overhead
     if len(text) < 8:
         return False
     # Chinese filler words
-    if re.search(r'呃|嗯|就是说|然后呢|那个', text):
+    if _RE_FILLER_CN.search(text):
         return True
     # English filler words
-    if re.search(r'\bum\b|\buh\b|\bso basically\b', text, re.IGNORECASE):
+    if _RE_FILLER_EN.search(text):
         return True
     # "like" / "you know" as fillers (with surrounding commas or at start)
-    if re.search(r',\s*like,|, you know,|^like ', text, re.IGNORECASE):
+    if _RE_FILLER_LIKE.search(text):
         return True
     # English ordinals
-    if re.search(r'\b(first|second|third|fourth|fifth|sixth|seventh|eighth|ninth|tenth|eleventh|twelfth|thirteenth|twentieth|thirtieth)\b', text, re.IGNORECASE):
+    if _RE_ORDINAL.search(text):
         return True
     # Currency and measurement words
-    if re.search(r'块|元|美元|dollars?|bucks|cents?|公里|公斤|米|pounds?|miles?|kilometers?', text, re.IGNORECASE):
+    if _RE_CURRENCY.search(text):
         return True
     # Chinese time patterns (e.g., 两点半, 三点十五)
-    if re.search(r'[一二三四五六七八九十两]+点[半一二三四五六七八九十]*', text):
+    if _RE_TIME_CN.search(text):
         return True
     # Unconverted Chinese number words (百分之, 零点, or consecutive number characters)
-    if re.search(r'百分之|零点|[一二三四五六七八九十百千万亿]{2,}', text):
+    if _RE_NUM_CN.search(text):
         return True
     # Unconverted English number words
-    if re.search(r'\b(thirty|forty|fifty|sixty|seventy|eighty|ninety|hundred|thousand|million|billion)\b', text, re.IGNORECASE):
+    if _RE_NUM_EN.search(text):
         return True
     # Long text with no punctuation — likely needs punctuation from LLM
-    if len(text) > 20 and not re.search(r'[.,!?;:，。！？；：]', text):
+    if len(text) > 20 and not _RE_NO_PUNCT.search(text):
         return True
     # No obvious issues found — skip polish
     return False
@@ -146,6 +161,11 @@ class TextPolisher:
         self._loaded = False
         self._load_failed = False
         self._inference_lock = threading.Lock()
+        self._notify_fn = None
+
+    def set_notify(self, fn):
+        """Set the notification callback to avoid importing voice_input."""
+        self._notify_fn = fn
 
     def load(self):
         """Load the LLM model. Call from background thread."""
@@ -162,9 +182,8 @@ class TextPolisher:
             log.warning("Text polish model failed to load: %s", e, exc_info=True)
             self._loaded = False
             self._load_failed = True
-            # Import notify here to avoid circular imports
-            from voice_input import notify
-            notify("VoiceInk", "Text polish model failed to load")
+            if self._notify_fn:
+                self._notify_fn("VoiceInk", "Text polish model failed to load")
 
     def polish(self, text):
         """Polish text using the LLM. Returns original text on failure."""
@@ -173,6 +192,8 @@ class TextPolisher:
         try:
             from mlx_lm import generate
 
+            # /no_think is a Qwen3-specific directive that disables the model's
+            # internal chain-of-thought reasoning, reducing latency for simple tasks.
             messages = [
                 {"role": "system", "content": _LLM_SYSTEM_PROMPT},
                 {"role": "user", "content": text + "\n/no_think"},

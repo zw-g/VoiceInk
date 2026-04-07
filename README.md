@@ -92,9 +92,12 @@ The install script will:
 ### Menu Bar
 Click the waveform icon (top-right) to access:
 - Recent Transcriptions (click to copy)
+- Usage Statistics (today and all-time word/recording counts)
 - Microphone selection
 - Screen Context toggle
 - Text Polish (AI) toggle
+- Auto-Dictionary toggle
+- Streaming Preview toggle
 - Hotkey selection
 - Edit Dictionary
 - Check for Updates
@@ -122,10 +125,13 @@ Edit `~/.local/voice-input/settings.json`:
   "preferred_mic": "MacBook Pro Microphone",
   "screen_context": true,
   "text_polish": true,
+  "auto_dictionary": true,
+  "streaming": true,
   "hotkey": "alt_r",
   "auto_update": true,
   "model": "Qwen/Qwen3-ASR-1.7B",
-  "ocr_languages": ["en", "zh-Hans", "zh-Hant"]
+  "ocr_languages": ["en", "zh-Hans", "zh-Hant"],
+  "stats": {"today": "", "today_words": 0, "today_recordings": 0, "total_words": 0, "total_recordings": 0}
 }
 ```
 

@@ -493,6 +493,11 @@ class TestITNEdgeCases(unittest.TestCase):
         result = _en_itn("twenty-three")
         self.assertEqual(result, "23")
 
+    def test_en_itn_trailing_punctuation_known_behavior(self):
+        # Known behavior: trailing punctuation is dropped from number phrases
+        result = _en_itn("twenty three.")
+        self.assertEqual(result, "23")
+
 
 if __name__ == "__main__":
     unittest.main()

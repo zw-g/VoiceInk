@@ -209,6 +209,18 @@ def load_settings():
             settings = json.loads(SETTINGS_PATH.read_text())
         except Exception as e:
             log.warning("Failed to parse settings.json (using defaults): %s", e, exc_info=True)
+    # Validate types
+    type_checks = {
+        "sample_rate": int, "max_recording_secs": (int, float),
+        "double_click_window": (int, float), "text_polish": bool,
+        "auto_update": bool, "auto_dictionary": bool, "streaming": bool,
+        "screen_context": bool,
+    }
+    for key, expected in type_checks.items():
+        if key in settings and not isinstance(settings[key], expected):
+            log.warning("Invalid type for setting '%s': %s (expected %s), using default",
+                        key, type(settings[key]).__name__, expected)
+            settings[key] = _DEFAULTS.get(key)
     # [P5-3] Apply config overrides
     MODEL = settings.get("model", _DEFAULTS["model"])
     SAMPLE_RATE = settings.get("sample_rate", _DEFAULTS["sample_rate"])
@@ -600,6 +612,7 @@ class VoiceInputApp(rumps.App):
         self._autostop_fired = False
         self._watchdog_fired = False
         self._polisher = TextPolisher()
+        self._polisher.set_notify(notify)
         self._text_polish = self._settings.get("text_polish", True)
         self._auto_dictionary = self._settings.get("auto_dictionary", True)
         self._streaming = self._settings.get("streaming", True)
