@@ -217,6 +217,18 @@ class TestNeedsPolish(unittest.TestCase):
         text = "this is a sentence without punct"
         self.assertTrue(_needs_polish(text))
 
+    def test_english_time_two_pm(self):
+        # Issue #113: English time expression "two pm"
+        self.assertTrue(_needs_polish("the meeting is at two pm"))
+
+    def test_english_time_twelve_thirty(self):
+        # Issue #113: English time expression "twelve thirty"
+        self.assertTrue(_needs_polish("let's meet at twelve thirty"))
+
+    def test_english_time_one_oclock(self):
+        # Issue #113: English time expression "one o'clock"
+        self.assertTrue(_needs_polish("it starts at one o'clock"))
+
 
 # ── DictionaryGuard tests ────────────────────────────────────────────
 

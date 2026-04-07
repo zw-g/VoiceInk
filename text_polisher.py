@@ -106,6 +106,7 @@ _RE_ORDINAL = re.compile(r'\b(first|second|third|fourth|fifth|sixth|seventh|eigh
 _RE_TIME_CN = re.compile(r'[一二三四五六七八九十两]+点[半一二三四五六七八九十]*')
 _RE_NUM_CN = re.compile(r'百分之|零点|[一二三四五六七八九十百千万亿]{2,}')
 _RE_NUM_EN = re.compile(r'\b(thirty|forty|fifty|sixty|seventy|eighty|ninety|hundred|thousand|million|billion)\b', re.IGNORECASE)
+_RE_TIME_EN = re.compile(r'\b(one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve)\s*(am|pm|o.clock|thirty|fifteen|forty.five)\b', re.IGNORECASE)
 _RE_CURRENCY_MEASURE = re.compile(r'块|元|美元|dollars?|bucks|cents?|公里|公斤|米|pounds?|miles?|kilometers?', re.IGNORECASE)
 _RE_NO_PUNCT = re.compile(r'[.,!?;:，。！？；：]')
 
@@ -153,6 +154,9 @@ def _needs_polish(text):
         return True
     # Unconverted English number words
     if _RE_NUM_EN.search(text):
+        return True
+    # English time expressions (e.g., "two pm", "twelve thirty", "one o'clock")
+    if _RE_TIME_EN.search(text):
         return True
     # Long text with no punctuation — likely needs punctuation from LLM
     if len(text) > 20 and not _RE_NO_PUNCT.search(text):
