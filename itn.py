@@ -50,7 +50,10 @@ def _en_itn(text):
                     break
 
             # Build the number phrase for word2number
-            phrase = " ".join(raw_span).rstrip(".,;:!?")
+            raw_phrase = " ".join(raw_span)
+            stripped = raw_phrase.rstrip(".,;:!?")
+            trailing = raw_phrase[len(stripped):]
+            phrase = stripped
             phrase_words = [w for w in phrase.lower().replace("-", " ").split() if w != "and"]
 
             # Only convert if: multi-word, contains scale, or followed by percent
@@ -64,7 +67,7 @@ def _en_itn(text):
                     if followed_by_pct:
                         suffix = "%"
                         j += 1
-                    result.append(str(value) + suffix)
+                    result.append(str(value) + suffix + trailing)
                     i = j
                     continue
                 except ValueError:

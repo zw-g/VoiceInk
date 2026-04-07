@@ -526,18 +526,18 @@ class TestITNEdgeCases(unittest.TestCase):
         result = _en_itn("twenty-three")
         self.assertEqual(result, "23")
 
-    def test_en_itn_trailing_punctuation_known_behavior(self):
-        # Known behavior: trailing punctuation is dropped from number phrases
+    def test_en_itn_trailing_punctuation_preserved(self):
+        # Trailing punctuation is preserved after number conversion
         result = _en_itn("twenty three.")
-        self.assertEqual(result, "23")
+        self.assertEqual(result, "23.")
 
     def test_en_itn_trailing_exclamation(self):
-        # Trailing exclamation is dropped from number phrases
-        self.assertEqual(_en_itn("twenty three!"), "23")
+        # Trailing exclamation is preserved after number conversion
+        self.assertEqual(_en_itn("twenty three!"), "23!")
 
     def test_en_itn_trailing_question(self):
-        # Trailing question mark is dropped from number phrases
-        self.assertEqual(_en_itn("twenty three?"), "23")
+        # Trailing question mark is preserved after number conversion
+        self.assertEqual(_en_itn("twenty three?"), "23?")
 
 
 # ── Settings validation tests ─────────────────────────────────────
