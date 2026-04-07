@@ -89,6 +89,10 @@ def _needs_polish(text):
     # Unconverted math expressions (English)
     if re.search(r'\b(greater than|less than|equals|squared|divided by)\b', text, re.IGNORECASE):
         return True
+    # Chinese sentence-final fillers / tag questions — check before length gate
+    # so short phrases like "你说对吧" still get polished
+    if re.search(r'啊[，。？！\s]|啊$|对吧|是吧', text):
+        return True
     # Very short text — not worth the LLM overhead
     if len(text) < 8:
         return False
@@ -114,7 +118,7 @@ def _needs_polish(text):
     if re.search(r'\b(thirty|forty|fifty|sixty|seventy|eighty|ninety|hundred|thousand|million|billion)\b', text, re.IGNORECASE):
         return True
     # Long text with no punctuation — likely needs punctuation from LLM
-    if len(text) > 30 and not re.search(r'[.,!?;:，。！？；：]', text):
+    if len(text) > 20 and not re.search(r'[.,!?;:，。！？；：]', text):
         return True
     # No obvious issues found — skip polish
     return False

@@ -195,6 +195,27 @@ class TestNeedsPolish(unittest.TestCase):
         text = "这是一个有标点符号的句子，写得很好。"
         self.assertFalse(_needs_polish(text))
 
+    def test_chinese_filler_ah_with_comma(self):
+        # Issue #82: 啊 as sentence-final filler before punctuation
+        self.assertTrue(_needs_polish("这个东西啊，还不错"))
+
+    def test_chinese_filler_ah_end_of_text(self):
+        # Issue #82: 啊 at end of text
+        self.assertTrue(_needs_polish("这个东西啊"))
+
+    def test_chinese_tag_question_dui_ba(self):
+        # Issue #82: 对吧 tag question filler
+        self.assertTrue(_needs_polish("你说对吧"))
+
+    def test_chinese_tag_question_shi_ba(self):
+        # Issue #82: 是吧 tag question filler
+        self.assertTrue(_needs_polish("你觉得是吧"))
+
+    def test_lower_punctuation_threshold(self):
+        # Issue #82: >20 chars without punctuation should trigger polish
+        text = "this is a sentence without punct"
+        self.assertTrue(_needs_polish(text))
+
 
 # ── DictionaryGuard tests ────────────────────────────────────────────
 
