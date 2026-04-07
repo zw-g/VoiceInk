@@ -917,7 +917,7 @@ class VoiceInputApp(rumps.App):
 
         # Dictionary popup management
         popup = DictionaryPopup.shared()
-        if popup._panel:
+        if popup._panels:
             popup.tick_main_thread()
         if self._auto_dictionary and self._pending_dict_popup and self.state == State.IDLE:
             word = self._pending_dict_popup
