@@ -58,7 +58,7 @@ chmod +x "$INSTALL_DIR/start.sh" "$INSTALL_DIR/stop.sh" "$INSTALL_DIR/uninstall.
 
 # Create default dictionary if not exists
 if [[ ! -f "$INSTALL_DIR/dictionary.json" ]]; then
-    echo '{"vocabulary": ["Qwen", "MLX", "PyTorch"]}' > "$INSTALL_DIR/dictionary.json"
+    echo '{"vocabulary": ["Qwen", "MLX", "PyTorch", "Sapling"]}' > "$INSTALL_DIR/dictionary.json"
 fi
 
 # Create Python venv
