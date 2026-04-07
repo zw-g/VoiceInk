@@ -69,9 +69,9 @@ DICT_PATH = CONFIG_DIR / "dictionary.json"
 SETTINGS_PATH = CONFIG_DIR / "settings.json"
 LOG_PATH = CONFIG_DIR / "voice_input.log"
 
-# [P2-4] Log rotation: 5MB max, 3 backups
+# [P2-4] Log rotation: 50MB max, 5 backups (300MB total for prompt tuning data)
 _log_handler = logging.handlers.RotatingFileHandler(
-    str(LOG_PATH), maxBytes=5 * 1024 * 1024, backupCount=3
+    str(LOG_PATH), maxBytes=50 * 1024 * 1024, backupCount=5
 )
 _log_handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(message)s"))
 log = logging.getLogger("voiceinput")
