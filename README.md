@@ -222,19 +222,6 @@ tail -50 ~/.local/voice-input/voice_input.log
 ```
 The app includes a watchdog that auto-recovers if the keyboard listener dies. It also auto-restarts on crashes via LaunchAgent KeepAlive.
 
-## Uninstall
-
-```bash
-# Stop the app
-pkill -f voice_input.py
-launchctl bootout gui/$(id -u) ~/Library/LaunchAgents/com.local.voiceinput.plist 2>/dev/null
-
-# Remove files
-rm -rf ~/.local/voice-input
-rm -f ~/Library/LaunchAgents/com.local.voiceinput.plist
-sudo rm -rf /Applications/VoiceInk.app
-```
-
 ## License
 
 MIT

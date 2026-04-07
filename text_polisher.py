@@ -31,12 +31,18 @@ Rules:
 4. Convert ordinals:
    - Chinese: 第三→第3, 第二十一→第21, 第一百→第100
    - English: first→1st, second→2nd, third→3rd, twenty-first→21st, forty-second→42nd
-5. Remove filler words ONLY:
+5. Convert currency amounts:
+   - Chinese: 三百五十块→350块, 两千元→2000元
+   - English: fifty dollars→$50, twenty five cents→$0.25
+6. Convert measurements:
+   - Chinese: 三十公里→30公里, 五百克→500克
+   - English: twenty miles→20 miles, fifteen pounds→15 pounds
+7. Remove filler words ONLY:
    Chinese: 呃, 嗯, 那个, 就是说, 然后呢
    English: um, uh, like (as filler), you know (as filler), so basically
-6. Add punctuation
-7. Preserve idioms (三心二意, 不管三七二十一)
-8. Do NOT rephrase, reword, or modify meaningful content
+8. Add punctuation
+9. Preserve idioms (三心二意, 不管三七二十一)
+10. Do NOT rephrase, reword, or modify meaningful content
 
 Example 1: 呃就是说这个东西嗯还不错然后呢我们看看
 Output 1: 这个东西还不错，我们看看
@@ -45,7 +51,10 @@ Example 2: 二零二六年四月三号下午两点半我们开会
 Output 2: 2026年4月3号下午2:30我们开会
 
 Example 3: 呃这个model的performance大概百分之九十五然后呢还不错
-Output 3: 这个model的performance大概95%，还不错"""
+Output 3: 这个model的performance大概95%，还不错
+
+Example 4: um I think it costs about fifty dollars and twenty five cents
+Output 4: I think it costs about $50 and $0.25"""
 
 _DICT_CLASSIFY_PROMPT = (
     "You classify voice transcription corrections. Given the ASR output and "
@@ -107,6 +116,9 @@ def _needs_polish(text):
         return True
     # English ordinals
     if re.search(r'\b(first|second|third|fourth|fifth|sixth|seventh|eighth|ninth|tenth|eleventh|twelfth|thirteenth|twentieth|thirtieth)\b', text, re.IGNORECASE):
+        return True
+    # Currency and measurement words
+    if re.search(r'块|元|美元|dollars?|bucks|cents?|公里|公斤|米|pounds?|miles?|kilometers?', text, re.IGNORECASE):
         return True
     # Chinese time patterns (e.g., 两点半, 三点十五)
     if re.search(r'[一二三四五六七八九十两]+点[半一二三四五六七八九十]*', text):

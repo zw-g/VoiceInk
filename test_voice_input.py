@@ -450,6 +450,50 @@ class TestContextTermFilter(unittest.TestCase):
         self.assertTrue(_is_valid_context_term("ab"))
 
 
+# ── TestClassifyCorrection tests ───────────────────────────────────
+
+
+class TestClassifyCorrection(unittest.TestCase):
+    """Test TextPolisher.classify_correction() with mocked LLM."""
+
+    def setUp(self):
+        self.polisher = TextPolisher()
+        self.polisher._loaded = True
+        self.polisher._model = MagicMock()
+        self.polisher._tokenizer = MagicMock()
+        self.polisher._tokenizer.apply_chat_template.return_value = "test"
+        self.polisher._sampler = MagicMock()
+
+    @patch('mlx_lm.generate')
+    def test_yes_response(self, mock_gen):
+        mock_gen.return_value = "YES PyTorch"
+        ok, word = self.polisher.classify_correction("pie torch", "PyTorch", [])
+        self.assertTrue(ok)
+        self.assertEqual(word, "PyTorch")
+
+    @patch('mlx_lm.generate')
+    def test_no_response(self, mock_gen):
+        mock_gen.return_value = "NO"
+        ok, word = self.polisher.classify_correction("he go", "he went", [])
+        self.assertFalse(ok)
+        self.assertIsNone(word)
+
+
+# ── Additional ITN edge case tests ─────────────────────────────────
+
+
+class TestITNEdgeCases(unittest.TestCase):
+    """Additional edge cases for ITN (inverse text normalization)."""
+
+    def test_chinese_decimal(self):
+        result = normalize_numbers("零点五")
+        self.assertIn("0.5", result)
+
+    def test_hyphenated_english(self):
+        result = _en_itn("twenty-three")
+        self.assertEqual(result, "23")
+
+
 if __name__ == "__main__":
     unittest.main()
 

@@ -866,6 +866,9 @@ class VoiceInputApp(rumps.App):
 
         # Detect code changes on disk (~every 10s, not every tick)
         self._periodic_tick += 1
+        # Heartbeat every 300 ticks (~5 minutes at 1-second tick)
+        if self._periodic_tick % 300 == 0:
+            log.info("Heartbeat: state=%s, listener=%s", self.state.name, "alive" if self._keyboard_listener else "dead")
         if self._periodic_tick % 10 == 0 and not getattr(self, '_restart_notified', False):
             try:
                 if os.path.getmtime(os.path.abspath(__file__)) > self._startup_mtime:
@@ -1697,6 +1700,8 @@ class VoiceInputApp(rumps.App):
                 log.info("NER daemon died, restarting (attempt %d)", self._ner_restart_count + 1)
                 if self._start_ner_daemon():
                     self._ner_restart_count += 1
+            else:
+                log.warning("NER daemon exhausted restart attempts, falling back to subprocess mode")
 
         # Try daemon first (with lock to prevent interleaved requests)
         if hasattr(self, "_ner_proc") and self._ner_proc and self._ner_proc.poll() is None:
