@@ -38,6 +38,7 @@ from voice_input import (
     normalize_numbers,
     _needs_polish,
     _is_valid_context_term,
+    _count_words,
     DictionaryGuard,
     load_dictionary,
     save_settings,
@@ -461,6 +462,25 @@ class TestContextTermFilter(unittest.TestCase):
 
     def test_accept_term_at_min_length(self):
         self.assertTrue(_is_valid_context_term("ab"))
+
+
+# ── _count_words tests ─────────────────────────────────────────────
+
+
+class TestCountWords(unittest.TestCase):
+    """CJK-aware word counting for usage statistics."""
+
+    def test_english_words(self):
+        self.assertEqual(_count_words("hello world"), 2)
+
+    def test_chinese_characters(self):
+        self.assertEqual(_count_words("今天天气很好"), 6)
+
+    def test_mixed_english_chinese(self):
+        self.assertEqual(_count_words("hello你好world"), 4)
+
+    def test_empty_string(self):
+        self.assertEqual(_count_words(""), 0)
 
 
 # ── TestClassifyCorrection tests ───────────────────────────────────

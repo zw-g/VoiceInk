@@ -461,6 +461,23 @@ def _is_valid_context_term(term):
     return True
 
 
+def _count_words(text):
+    """Count words: CJK characters count as 1 word each, Latin words by spaces."""
+    count = 0
+    in_latin = False
+    for ch in text:
+        if '\u4e00' <= ch <= '\u9fff' or '\u3400' <= ch <= '\u4dbf' or '\uf900' <= ch <= '\ufaff':
+            count += 1
+            in_latin = False
+        elif ch.isalpha():
+            if not in_latin:
+                count += 1
+                in_latin = True
+        else:
+            in_latin = False
+    return count
+
+
 # ── Streaming HUD ────────────────────────────────────────────────
 
 
@@ -2145,7 +2162,7 @@ class VoiceInputApp(rumps.App):
             else:
                 log.info("Result: %s", text)
             self._add_to_history(text)
-            self._update_stats(len(text.split()))
+            self._update_stats(_count_words(text))
             self._type_text(text)
         except Exception as e:
             log.error("Transcription error: %s", e, exc_info=True)
