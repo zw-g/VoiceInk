@@ -1271,7 +1271,8 @@ class VoiceInputApp(rumps.App):
                                 return False
                             log.info("Update integrity verified (SHA: %s)", expected_sha)
                         except Exception as e:
-                            log.warning("Could not verify update integrity: %s (proceeding anyway)", e)
+                            log.warning("Could not verify update integrity: %s — aborting update", e)
+                            return False
                         src_dir = os.path.join(tmp_dir, extracted[0])
                         for f in ["voice_input.py", "itn.py", "text_polisher.py",
                                   "dictionary_ui.py", "test_voice_input.py",
