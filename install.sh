@@ -49,7 +49,7 @@ mkdir -p "$INSTALL_DIR"
 
 # Copy source files
 echo "Copying files..."
-for f in voice_input.py itn.py text_polisher.py dictionary_ui.py test_voice_input.py ner_daemon.swift ner_tool.swift start.sh stop.sh uninstall.sh status.sh requirements.txt VERSION VoiceInk.icns icon_light.png icon_dark.png icon_glow.png; do
+for f in voice_input.py itn.py text_polisher.py dictionary_ui.py test_voice_input.py ner_common.swift ner_daemon.swift ner_tool.swift start.sh stop.sh uninstall.sh status.sh requirements.txt VERSION VoiceInk.icns icon_light.png icon_dark.png icon_glow.png; do
     if [[ -f "$SCRIPT_DIR/$f" ]]; then
         cp "$SCRIPT_DIR/$f" "$INSTALL_DIR/"
     fi
@@ -87,11 +87,11 @@ echo "Models ready."
 
 # [AUDIT-8] Compile Swift NER tools with error checking
 echo "Compiling NER tools..."
-if ! swiftc -O -o "$INSTALL_DIR/ner_tool" "$INSTALL_DIR/ner_tool.swift"; then
+if ! swiftc -O -o "$INSTALL_DIR/ner_tool" "$INSTALL_DIR/ner_common.swift" "$INSTALL_DIR/ner_tool.swift"; then
     echo "Error: Failed to compile ner_tool.swift"
     exit 1
 fi
-if ! swiftc -O -o "$INSTALL_DIR/ner_daemon" "$INSTALL_DIR/ner_daemon.swift"; then
+if ! swiftc -O -o "$INSTALL_DIR/ner_daemon" "$INSTALL_DIR/ner_common.swift" "$INSTALL_DIR/ner_daemon.swift"; then
     echo "Error: Failed to compile ner_daemon.swift"
     exit 1
 fi

@@ -1,126 +1,17 @@
-import NaturalLanguage
+// One-shot NER tool — reads text from stdin, prints entities, exits
+// Shared functions (isCleanTerm, extractEntities) live in ner_common.swift
+
 import Foundation
 
-// Read text from stdin
-let data = FileHandle.standardInput.readDataToEndOfFile()
-guard let input = String(data: data, encoding: .utf8), !input.isEmpty else {
-    print("")
-    exit(0)
-}
-
-let tagger = NLTagger(tagSchemes: [.nameType, .lexicalClass])
-tagger.string = input
-
-let fullRange = input.startIndex..<input.endIndex
-
-// Detect language and set hint
-let recognizer = NLLanguageRecognizer()
-recognizer.processString(input)
-if let lang = recognizer.dominantLanguage {
-    tagger.setLanguage(lang, range: fullRange)
-}
-
-var seen = Set<String>()
-var results: [String] = []
-
-// [P2-6] Filter: reject OCR garbage
-func isCleanTerm(_ word: String) -> Bool {
-    // Reject single characters
-    if word.count < 2 { return false }
-
-    // Reject terms with Unicode replacement chars or control chars
-    if word.contains("\u{FFFD}") || word.unicodeScalars.contains(where: { $0.value < 32 }) {
-        return false
-    }
-    // Reject terms that are entirely non-letter (e.g., "￿.￿", "$+<>")
-    if !word.contains(where: { $0.isLetter }) { return false }
-
-    // Reject terms with non-ASCII artifacts (OCR garbage like "Él", "ÈThllfeature", "￿")
-    let asciiLetters = word.unicodeScalars.filter {
-        ($0.value >= 65 && $0.value <= 90) || ($0.value >= 97 && $0.value <= 122)
-    }
-    let nonAscii = word.unicodeScalars.filter { !$0.isASCII }
-    if nonAscii.count > 0 && asciiLetters.count > 0 {
-        // Mixed ASCII + non-ASCII like "CIaUdeÈ" — likely OCR garbage
-        return false
-    }
-
-    // Reject embedded digits: letter-digit-letter pattern (OCR substitution like Ba8h)
-    let chars = Array(word)
-    for i in 1..<(chars.count - 1) {
-        if chars[i].isNumber && chars[i-1].isLetter && chars[i+1].isLetter {
-            return false
+@main
+struct NERTool {
+    static func main() {
+        let data = FileHandle.standardInput.readDataToEndOfFile()
+        guard let input = String(data: data, encoding: .utf8), !input.isEmpty else {
+            print("")
+            exit(0)
         }
+
+        print(extractEntities(input).joined(separator: "\n"))
     }
-
-    // Reject scattered digits in otherwise alphabetic terms
-    let digitPositions = chars.indices.filter { chars[$0].isNumber }
-    if digitPositions.count > 1 {
-        let contiguous = zip(digitPositions, digitPositions.dropFirst()).allSatisfy { $1 == $0 + 1 }
-        if !contiguous { return false }
-    }
-
-    // Reject random case zigzag (base64-like: AAQAT9bPvJQ)
-    let lettersOnly = chars.filter { $0.isLetter }
-    if lettersOnly.count >= 6 {
-        var zigzags = 0
-        for i in 2..<lettersOnly.count {
-            if lettersOnly[i].isUppercase != lettersOnly[i-1].isUppercase &&
-               lettersOnly[i-1].isUppercase != lettersOnly[i-2].isUppercase {
-                zigzags += 1
-            }
-        }
-        if zigzags >= 3 { return false }
-    }
-
-    // Reject terms that look like garbled OCR: random mixed digits+letters
-    // e.g., "8y8te", "1tsf1", "a550ciated", "IJ17AfjL"
-    let digits = word.filter { $0.isNumber }
-    let letters = word.filter { $0.isLetter }
-    if digits.count > 0 && letters.count > 0 && word.count > 4 {
-        let ratio = Double(digits.count) / Double(word.count)
-        if ratio > 0.3 && ratio < 0.7 { return false }
-    }
-
-    if word.count > 15 && word == word.uppercased() { return false }
-
-    return true
 }
-
-// 1. Named entities (PersonalName, OrganizationName, PlaceName)
-tagger.enumerateTags(in: fullRange, unit: .word, scheme: .nameType,
-    options: [.omitPunctuation, .omitWhitespace, .joinNames]) { tag, range in
-    if let tag = tag, tag != .otherWord {
-        let word = String(input[range])
-        let key = word.lowercased()
-        if !seen.contains(key) && isCleanTerm(word) {
-            seen.insert(key)
-            results.append(word)
-        }
-    }
-    return true
-}
-
-// 2. Proper nouns via POS tagging (catches technical terms NER misses)
-tagger.enumerateTags(in: fullRange, unit: .word, scheme: .lexicalClass,
-    options: [.omitPunctuation, .omitWhitespace]) { tag, range in
-    if let tag = tag, tag == .noun {
-        let word = String(input[range])
-        let isCapitalized = word.first?.isUppercase == true
-        let hasMixedCase = word.contains(where: { $0.isUppercase }) &&
-                          word.contains(where: { $0.isLowercase }) &&
-                          word.dropFirst().contains(where: { $0.isUppercase })
-        let hasDigits = word.contains(where: { $0.isNumber })
-
-        if (isCapitalized || hasMixedCase || hasDigits) && word.count > 1 {
-            let key = word.lowercased()
-            if !seen.contains(key) && isCleanTerm(word) {
-                seen.insert(key)
-                results.append(word)
-            }
-        }
-    }
-    return true
-}
-
-print(results.joined(separator: "\n"))

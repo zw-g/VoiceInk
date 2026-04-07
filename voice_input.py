@@ -1249,7 +1249,7 @@ class VoiceInputApp(rumps.App):
                         src_dir = os.path.join(tmp_dir, extracted[0])
                         for f in ["voice_input.py", "itn.py", "text_polisher.py",
                                   "dictionary_ui.py", "test_voice_input.py",
-                                  "ner_daemon.swift", "ner_tool.swift",
+                                  "ner_common.swift", "ner_daemon.swift", "ner_tool.swift",
                                   "install.sh", "start.sh", "stop.sh", "uninstall.sh",
                                   "status.sh", "requirements.txt", "VERSION", "README.md",
                                   "VoiceInk.icns", "icon_light.png", "icon_dark.png", "icon_glow.png"]:
@@ -1283,12 +1283,13 @@ class VoiceInputApp(rumps.App):
                 else:
                     log.info("Python dependencies updated")
 
+            ner_common = str(self._INSTALL_DIR / "ner_common.swift")
             for src_file in ["ner_tool.swift", "ner_daemon.swift"]:
                 name = src_file.replace(".swift", "")
                 tmp_out = str(self._INSTALL_DIR / name) + ".new"
                 r = subprocess.run(
                     ["swiftc", "-O", "-o", tmp_out,
-                     str(self._INSTALL_DIR / src_file)],
+                     ner_common, str(self._INSTALL_DIR / src_file)],
                     capture_output=True, timeout=60,
                 )
                 if r.returncode != 0:
