@@ -149,6 +149,12 @@ Changes auto-reload within 1 second.
 
 VoiceInk automatically detects when you correct transcribed text. If the correction suggests a new term (brand names, technical terms, bilingual code-switching), a popup appears for 5 seconds to confirm the addition. Click the X button to cancel.
 
+### Streaming Preview
+See real-time transcription as you speak. A floating HUD at the bottom of the screen shows interim results during recording. Toggle on/off from the menu bar.
+
+### Usage Statistics
+Track your dictation usage locally. View today's and all-time word count and recording count from the Statistics submenu. All data is stored locally — never sent anywhere.
+
 ### Restart to Update
 
 When auto-update downloads a new version in the background, a **Restart to Update** menu item appears in the menu bar. Click it to apply the update and restart VoiceInk.

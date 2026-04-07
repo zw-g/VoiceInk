@@ -214,7 +214,7 @@ def load_settings():
         "sample_rate": int, "max_recording_secs": (int, float),
         "double_click_window": (int, float), "text_polish": bool,
         "auto_update": bool, "auto_dictionary": bool, "streaming": bool,
-        "screen_context": bool,
+        "screen_context": bool, "ocr_languages": list, "model": str,
     }
     for key, expected in type_checks.items():
         if key in settings and not isinstance(settings[key], expected):
@@ -1105,7 +1105,7 @@ class VoiceInputApp(rumps.App):
             log.info("Model loaded")
         except Exception as e:
             log.error("Model load failed: %s", e, exc_info=True)
-            notify("VoiceInk", f"Model failed: {e}")
+            notify("VoiceInk", "Model failed to load — check log for details")
             # [P1-3] UI update via main thread is best-effort here
             self.status_item.title = "Model failed"
             self.state = State.ERROR  # [AUDIT-13] Show error icon
@@ -1315,7 +1315,7 @@ class VoiceInputApp(rumps.App):
                 notify("VoiceInk", "Update failed \u2014 check log for details")
         except Exception as e:
             log.error("Update failed: %s", e, exc_info=True)
-            notify("VoiceInk", f"Update failed: {e}")
+            notify("VoiceInk", "Update failed — check log for details")
 
     def _manual_update(self, _):
         """Menu: Check for Updates clicked."""
@@ -2127,7 +2127,7 @@ class VoiceInputApp(rumps.App):
             self._type_text(text)
         except Exception as e:
             log.error("Transcription error: %s", e, exc_info=True)
-            notify("VoiceInk", f"Error: {e}")
+            notify("VoiceInk", "Transcription error — check log for details")
             play_sound("Basso")  # [P4-2] error feedback
         finally:
             # Clear streaming state and signal HUD dismissal

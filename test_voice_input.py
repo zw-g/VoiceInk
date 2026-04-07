@@ -498,6 +498,88 @@ class TestITNEdgeCases(unittest.TestCase):
         result = _en_itn("twenty three.")
         self.assertEqual(result, "23")
 
+    def test_en_itn_trailing_exclamation(self):
+        # Trailing exclamation is dropped from number phrases
+        self.assertEqual(_en_itn("twenty three!"), "23")
+
+    def test_en_itn_trailing_question(self):
+        # Trailing question mark is dropped from number phrases
+        self.assertEqual(_en_itn("twenty three?"), "23")
+
+
+# ── Settings validation tests ─────────────────────────────────────
+
+
+class TestSettingsValidation(unittest.TestCase):
+    """Validate that load_settings() enforces correct types."""
+
+    def test_invalid_type_falls_back_to_default(self):
+        """Setting with wrong type falls back to default value."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            fake_path = Path(tmpdir) / "settings.json"
+            # sample_rate should be int, not str
+            fake_path.write_text(json.dumps({"sample_rate": "not_a_number"}))
+            with patch.object(voice_input, 'SETTINGS_PATH', fake_path):
+                settings = voice_input.load_settings()
+            # Should fall back to default (16000)
+            self.assertEqual(settings.get("sample_rate"), 16000)
+
+    def test_valid_type_passes_through(self):
+        """Setting with correct type is preserved."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            fake_path = Path(tmpdir) / "settings.json"
+            fake_path.write_text(json.dumps({"sample_rate": 44100}))
+            with patch.object(voice_input, 'SETTINGS_PATH', fake_path):
+                settings = voice_input.load_settings()
+            self.assertEqual(settings.get("sample_rate"), 44100)
+
+    def test_missing_key_uses_default(self):
+        """Missing key is not added but default is used when accessed."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            fake_path = Path(tmpdir) / "settings.json"
+            fake_path.write_text(json.dumps({}))
+            with patch.object(voice_input, 'SETTINGS_PATH', fake_path):
+                settings = voice_input.load_settings()
+            # sample_rate not in settings, so .get() returns None
+            self.assertNotIn("sample_rate", settings)
+
+
+# ── Settings round-trip test ──────────────────────────────────────
+
+
+class TestSettingsRoundTrip(unittest.TestCase):
+    """Save settings with stats and history, reload, verify data intact."""
+
+    def test_save_and_reload_preserves_data(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            fake_path = Path(tmpdir) / "settings.json"
+            settings = {
+                "model": "Qwen/Qwen3-ASR-1.7B",
+                "sample_rate": 16000,
+                "text_polish": True,
+                "streaming": False,
+                "stats": {
+                    "today": "2026-04-06",
+                    "today_words": 42,
+                    "today_recordings": 5,
+                    "total_words": 1000,
+                    "total_recordings": 200,
+                },
+                "history": ["hello world", "test recording"],
+            }
+            with patch.object(voice_input, 'SETTINGS_PATH', fake_path):
+                save_settings(settings)
+            # Reload
+            with patch.object(voice_input, 'SETTINGS_PATH', fake_path):
+                reloaded = voice_input.load_settings()
+            self.assertEqual(reloaded["model"], "Qwen/Qwen3-ASR-1.7B")
+            self.assertEqual(reloaded["sample_rate"], 16000)
+            self.assertTrue(reloaded["text_polish"])
+            self.assertFalse(reloaded["streaming"])
+            self.assertEqual(reloaded["stats"]["today_words"], 42)
+            self.assertEqual(reloaded["stats"]["total_recordings"], 200)
+            self.assertEqual(reloaded["history"], ["hello world", "test recording"])
+
 
 if __name__ == "__main__":
     unittest.main()
