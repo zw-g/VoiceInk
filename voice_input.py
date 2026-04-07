@@ -449,6 +449,112 @@ def _is_valid_context_term(term):
     return True
 
 
+# ── Streaming HUD ────────────────────────────────────────────────
+
+
+class StreamingHUD:
+    """Floating translucent panel showing interim streaming transcription text.
+
+    Singleton via shared(). All UI methods (show, update_text, dismiss) MUST
+    be called on the main thread (from _periodic).
+    """
+
+    _instance = None
+
+    def __init__(self):
+        self._panel = None
+        self._label = None
+
+    @classmethod
+    def shared(cls):
+        if cls._instance is None:
+            cls._instance = cls()
+        return cls._instance
+
+    def show(self):
+        """Create and display the HUD panel. MUST be called on main thread."""
+        if self._panel:
+            return
+        try:
+            from AppKit import (
+                NSPanel, NSScreen, NSColor, NSFont, NSMakeRect,
+                NSTextField, NSBackingStoreBuffered, NSVisualEffectView,
+            )
+
+            W, H = 500, 48
+            screen = NSScreen.mainScreen()
+            if not screen:
+                return
+            sx = screen.frame().size.width
+            x = (sx - W) / 2
+            y = 80
+
+            panel = NSPanel.alloc().initWithContentRect_styleMask_backing_defer_(
+                NSMakeRect(x, y, W, H),
+                128,  # NSWindowStyleMaskNonactivatingPanel
+                NSBackingStoreBuffered,
+                False,
+            )
+            panel.setLevel_(3)  # NSFloatingWindowLevel
+            panel.setCollectionBehavior_(1 | 256)  # CanJoinAllSpaces | FullScreenAuxiliary
+            panel.setOpaque_(False)
+            panel.setBackgroundColor_(NSColor.clearColor())
+            panel.setHasShadow_(True)
+            panel.setAlphaValue_(0.0)
+            panel.setHidesOnDeactivate_(False)
+            panel.setFloatingPanel_(True)
+
+            # HUD background
+            content = NSVisualEffectView.alloc().initWithFrame_(NSMakeRect(0, 0, W, H))
+            content.setMaterial_(13)  # HUDWindow
+            content.setBlendingMode_(1)  # BehindWindow
+            content.setState_(1)  # Active
+            content.setWantsLayer_(True)
+            content.layer().setCornerRadius_(12.0)
+            content.layer().setMasksToBounds_(True)
+            panel.setContentView_(content)
+
+            # Text label
+            label = NSTextField.labelWithString_("")
+            label.setFrame_(NSMakeRect(16, 14, W - 32, 20))
+            label.setFont_(NSFont.systemFontOfSize_(13.0))
+            label.setTextColor_(NSColor.whiteColor())
+            label.setLineBreakMode_(5)  # NSLineBreakByTruncatingHead
+            content.addSubview_(label)
+            self._label = label
+
+            self._panel = panel
+            panel.orderFrontRegardless()
+            panel.setAlphaValue_(0.92)
+
+        except Exception as e:
+            log.warning("StreamingHUD show failed: %s", e)
+            self._panel = None
+            self._label = None
+
+    def update_text(self, text):
+        """Update displayed text. Truncates long text from the left."""
+        if not self._label:
+            return
+        if len(text) > 77:
+            text = "..." + text[-74:]
+        try:
+            self._label.setStringValue_(text)
+        except Exception:
+            pass
+
+    def dismiss(self):
+        """Close the HUD panel. MUST be called on main thread."""
+        if not self._panel:
+            return
+        try:
+            self._panel.close()
+        except Exception:
+            pass
+        self._panel = None
+        self._label = None
+
+
 # ── App ───────────────────────────────────────────────────────────
 
 
@@ -496,6 +602,11 @@ class VoiceInputApp(rumps.App):
         self._polisher = TextPolisher()
         self._text_polish = self._settings.get("text_polish", True)
         self._auto_dictionary = self._settings.get("auto_dictionary", True)
+        self._streaming = self._settings.get("streaming", True)
+        self._stream_state = None
+        self._stream_text = ""
+        self._stream_hud_dirty = False
+        self._stream_feeder_stop = None
         self._dict_guard = DictionaryGuard()
         self._last_ax_inserted = None  # (text, ax_element_ref, field_value_after)
         self._correction_timer = None
@@ -549,6 +660,9 @@ class VoiceInputApp(rumps.App):
         self.auto_dict_item = rumps.MenuItem("Auto-Dictionary", callback=self._toggle_auto_dict)
         self.auto_dict_item.state = self._auto_dictionary
 
+        self.stream_item = rumps.MenuItem("Streaming Preview", callback=self._toggle_streaming)
+        self.stream_item.state = self._streaming
+
         self.history_menu = rumps.MenuItem("Recent Transcriptions")
         self._rebuild_history_menu()
 
@@ -568,6 +682,7 @@ class VoiceInputApp(rumps.App):
             self.ctx_item,
             self.polish_item,
             self.auto_dict_item,
+            self.stream_item,
             rumps.MenuItem("Edit Dictionary", callback=self._edit_dict),
             None,
             rumps.MenuItem("Check for Updates", callback=self._manual_update),
@@ -773,6 +888,19 @@ class VoiceInputApp(rumps.App):
             word = self._pending_dict_popup
             self._pending_dict_popup = None
             popup.show(word, self._on_dict_popup_done)
+
+        # Streaming HUD management
+        if self._streaming:
+            hud = StreamingHUD.shared()
+            if self.state in (State.RECORDING_HOLD, State.RECORDING_TOGGLE) and self._stream_text:
+                if not hud._panel:
+                    hud.show()
+                if self._stream_hud_dirty:
+                    self._stream_hud_dirty = False
+                    hud.update_text(self._stream_text)
+            elif hud._panel:
+                hud.dismiss()
+                self._stream_hud_dirty = False
 
         # [BUG-13] Rebuild history menu on main thread
         if getattr(self, "_history_dirty", False):
@@ -1194,6 +1322,13 @@ class VoiceInputApp(rumps.App):
         self._save_settings()
         log.info("Auto-Dictionary: %s", "enabled" if self._auto_dictionary else "disabled")
 
+    def _toggle_streaming(self, sender):
+        self._streaming = not self._streaming
+        sender.state = self._streaming
+        self._settings["streaming"] = self._streaming
+        self._save_settings()
+        log.info("Streaming: %s", "enabled" if self._streaming else "disabled")
+
     # ── Permission checks [P4-1] ─────────────────────────────
 
     def _check_permissions(self):
@@ -1358,6 +1493,7 @@ class VoiceInputApp(rumps.App):
             "auto_update": self._auto_update,
             "text_polish": self._text_polish,
             "auto_dictionary": self._auto_dictionary,
+            "streaming": self._streaming,
             "history": self._history[:self._MAX_HISTORY],
         })
         save_settings(self._settings)
@@ -1373,6 +1509,10 @@ class VoiceInputApp(rumps.App):
     def _cleanup_resources(self):
         """Release all resources for restart or shutdown."""
         DictionaryPopup.shared().dismiss_if_active()
+        StreamingHUD.shared().dismiss()
+        if self._stream_feeder_stop:
+            self._stream_feeder_stop.set()
+        self._stream_state = None
         if self._correction_timer:
             self._correction_timer.cancel()
         self._cancel_timer()
@@ -1573,8 +1713,30 @@ class VoiceInputApp(rumps.App):
             self._ocr_done.clear()
             threading.Thread(target=self._capture_screen, daemon=True).start()
 
+        # Start streaming preview if enabled
+        if self._streaming and self.session:
+            try:
+                self._stream_state = self.session.init_streaming(
+                    context="",
+                    chunk_size_sec=1.0,
+                )
+                self._stream_text = ""
+                self._stream_hud_dirty = True
+                self._stream_feeder_stop = threading.Event()
+                threading.Thread(
+                    target=self._stream_feeder, daemon=True
+                ).start()
+            except Exception as e:
+                log.warning("Streaming init failed: %s", e)
+                self._stream_state = None
+
     # [P4-6] Cancel recording without transcribing
     def _cancel_rec(self):
+        if self._stream_feeder_stop:
+            self._stream_feeder_stop.set()
+        self._stream_state = None
+        self._stream_text = ""
+        self._stream_hud_dirty = True
         if self.stream:
             try:
                 self.stream.stop()
@@ -1590,6 +1752,9 @@ class VoiceInputApp(rumps.App):
         log.info("Recording cancelled")
 
     def _stop_rec_and_transcribe(self):
+        # Stop streaming feeder before transcription
+        if self._stream_feeder_stop:
+            self._stream_feeder_stop.set()
         # [P1-2] Crash protection
         if self.stream:
             try:
@@ -1613,6 +1778,29 @@ class VoiceInputApp(rumps.App):
             log.warning("Audio callback status: %s", status)
         self._last_audio_cb_time = time.monotonic()
         self.audio_frames.append(indata.copy())
+
+    def _stream_feeder(self):
+        """Feed audio chunks to streaming ASR. Runs on background thread."""
+        last_fed = 0
+        while not self._stream_feeder_stop.wait(timeout=0.5):
+            state = self._stream_state
+            if state is None:
+                break
+            frames = self.audio_frames
+            n = len(frames)
+            if n <= last_fed:
+                continue
+            new = frames[last_fed:n]
+            last_fed = n
+            try:
+                pcm = np.concatenate(new).flatten()
+                self._stream_state = self.session.feed_audio(pcm, state)
+                text = self._stream_state.text
+                if text != self._stream_text:
+                    self._stream_text = text
+                    self._stream_hud_dirty = True
+            except Exception as e:
+                log.debug("Stream feed error: %s", e)
 
     def _capture_screen(self):
         try:
@@ -1866,6 +2054,10 @@ class VoiceInputApp(rumps.App):
             notify("VoiceInk", f"Error: {e}")
             play_sound("Basso")  # [P4-2] error feedback
         finally:
+            # Clear streaming state and signal HUD dismissal
+            self._stream_state = None
+            self._stream_text = ""
+            self._stream_hud_dirty = True
             self.state = State.IDLE
             self._pending_status_title = "Ready"
 
