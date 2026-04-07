@@ -1902,7 +1902,8 @@ class VoiceInputApp(rumps.App):
             state = self._stream_state
             if state is None:
                 break
-            frames = self.audio_frames
+            with self.lock:
+                frames = self.audio_frames
             n = len(frames)
             if n <= last_fed:
                 continue
