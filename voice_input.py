@@ -1883,8 +1883,9 @@ class VoiceInputApp(rumps.App):
         play_sound("Pop")
         log.info("Recording stopped")
 
-        frames = list(self.audio_frames)
-        self.audio_frames = []
+        with self.lock:
+            frames = self.audio_frames
+            self.audio_frames = []
         threading.Thread(target=self._transcribe, args=(frames,), daemon=True).start()
 
     def _audio_cb(self, indata, frames, time_info, status):
