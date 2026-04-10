@@ -1098,12 +1098,24 @@ class VoiceInputApp(rumps.App):
                 self._stop_rec_and_transcribe()
 
     def _watchdog_cancel(self):
-        """Force-stop a stuck recording, transcribe it, and restart the listener."""
+        """Force-stop a stuck recording and recover to IDLE.
+
+        [#128] If no audio was captured, cancel the recording outright
+        instead of attempting to transcribe silence.  If some audio was
+        captured, transcribe what we have.
+        """
         with self.lock:
             if self.state in (State.RECORDING_HOLD, State.RECORDING_TOGGLE):
-                log.warning("Watchdog: force-stopping stuck recording, transcribing audio")
-                notify("VoiceInk", "Recording auto-stopped — transcribing")
-                self._stop_rec_and_transcribe()
+                has_audio = bool(self.audio_frames)
+                if has_audio:
+                    log.warning("Watchdog: force-stopping stuck recording, transcribing %d frames", len(self.audio_frames))
+                    notify("VoiceInk", "Recording auto-stopped — transcribing")
+                    self._stop_rec_and_transcribe()
+                else:
+                    log.warning("Watchdog: no audio captured, cancelling recording")
+                    notify("VoiceInk", "Recording cancelled — no audio detected")
+                    self._cancel_rec()
+                    self.state = State.IDLE
         # Force listener restart so the auto-restart loop in _setup kicks in
         listener = self._keyboard_listener
         if listener:
@@ -1784,16 +1796,27 @@ class VoiceInputApp(rumps.App):
             self._correction_timer.cancel()
             self._correction_timer = None
         self._pending_dict_popup = None
+
+        # [#128] Re-initialize PortAudio before resolving mic to get fresh
+        # device IDs — after a hot-plug event, cached IDs may be stale.
+        try:
+            sd._terminate()
+            sd._initialize()
+        except Exception:
+            pass
         self._resolve_mic()
+
         self.audio_frames = []
         self._rec_start_time = time.time()
         self._autostop_fired = False
         self._watchdog_fired = False
 
         # [P1-2] Crash protection for mic errors
+        # [#128] If preferred mic fails, fall back to system default device
+        device_id = self.active_mic_id
         try:
             self.stream = sd.InputStream(
-                device=self.active_mic_id,
+                device=device_id,
                 samplerate=SAMPLE_RATE,
                 channels=1,
                 dtype="float32",
@@ -1802,11 +1825,31 @@ class VoiceInputApp(rumps.App):
             )
             self.stream.start()
         except Exception as e:
-            log.error("Mic open failed: %s", e, exc_info=True)
-            notify("VoiceInk", "Microphone error — check System Settings > Privacy > Microphone")
-            play_sound("Basso")
-            self.state = State.IDLE
-            return
+            if device_id is not None:
+                log.warning("Mic open failed for device %s: %s — trying default", device_id, e)
+                try:
+                    self.stream = sd.InputStream(
+                        device=None,
+                        samplerate=SAMPLE_RATE,
+                        channels=1,
+                        dtype="float32",
+                        blocksize=512,
+                        callback=self._audio_cb,
+                    )
+                    self.stream.start()
+                    log.info("Fell back to system default microphone")
+                except Exception as e2:
+                    log.error("Default mic also failed: %s", e2, exc_info=True)
+                    notify("VoiceInk", "Microphone error — check System Settings > Privacy > Microphone")
+                    play_sound("Basso")
+                    self.state = State.IDLE
+                    return
+            else:
+                log.error("Mic open failed: %s", e, exc_info=True)
+                notify("VoiceInk", "Microphone error — check System Settings > Privacy > Microphone")
+                play_sound("Basso")
+                self.state = State.IDLE
+                return
 
         self.title = ""
         play_sound("Tink")
