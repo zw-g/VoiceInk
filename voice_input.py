@@ -2185,7 +2185,7 @@ class VoiceInputApp(rumps.App):
             self._pending_status_title = "Ready"
 
     def _type_text(self, text):
-        """[AUDIT-21] 3-tier hybrid: AX → CGEvent → clipboard paste."""
+        """2-tier hybrid: AX → CGEvent. No clipboard paste (#129)."""
         try:
             with self._type_lock:
                 # Tier 1: AX insertion (instant, no clipboard, ~8ms)
@@ -2194,21 +2194,12 @@ class VoiceInputApp(rumps.App):
                     if self._auto_dictionary and self._last_ax_inserted:
                         self._schedule_correction_check()
                     return
-                # Tier 2: CGEvent keyboard synthesis (no clipboard, universal, ~3ms/20chars)
+                # Tier 2: CGEvent keyboard synthesis (no clipboard, universal)
                 self._last_ax_inserted = None  # Clear stale AX ref
-                if len(text) <= 200:
-                    self._type_via_cgevent(text)
-                    log.info("Typed %d chars via CGEvent", len(text))
-                    if self._auto_dictionary:
-                        time.sleep(0.05)
-                        if self._try_snapshot_ax_field(text):
-                            self._schedule_correction_check()
-                    return
-                # Tier 3: Clipboard paste (long text only)
-                self._clipboard_paste(text)
-                log.info("Typed %d chars via clipboard paste", len(text))
+                self._type_via_cgevent(text)
+                log.info("Typed %d chars via CGEvent", len(text))
                 if self._auto_dictionary:
-                    time.sleep(0.1)
+                    time.sleep(0.05)
                     if self._try_snapshot_ax_field(text):
                         self._schedule_correction_check()
         except Exception as e:
