@@ -614,6 +614,49 @@ class TestSettingsRoundTrip(unittest.TestCase):
             self.assertEqual(reloaded["history"], ["hello world", "test recording"])
 
 
+# ── History truncation privacy test ──────────────────────────────
+
+
+class TestHistoryTruncation(unittest.TestCase):
+    """Issue #122: history persisted to disk must be truncated for privacy."""
+
+    def test_long_text_truncated_on_save(self):
+        """Text longer than 50 chars is truncated with ellipsis on disk."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            fake_path = Path(tmpdir) / "settings.json"
+            long_text = "a" * 80  # 80 chars, exceeds 50-char limit
+            settings = {"history": [long_text]}
+            with patch.object(voice_input, 'SETTINGS_PATH', fake_path):
+                save_settings(settings)
+            data = json.loads(fake_path.read_text())
+            saved = data["history"][0]
+            self.assertEqual(len(saved), 51)  # 50 chars + ellipsis
+            self.assertTrue(saved.endswith("\u2026"))
+            self.assertEqual(saved, "a" * 50 + "\u2026")
+
+    def test_short_text_not_truncated(self):
+        """Text 50 chars or shorter is stored as-is."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            fake_path = Path(tmpdir) / "settings.json"
+            short_text = "hello world"
+            settings = {"history": [short_text]}
+            with patch.object(voice_input, 'SETTINGS_PATH', fake_path):
+                save_settings(settings)
+            data = json.loads(fake_path.read_text())
+            self.assertEqual(data["history"][0], "hello world")
+
+    def test_exactly_50_chars_not_truncated(self):
+        """Text at exactly 50 chars is not truncated."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            fake_path = Path(tmpdir) / "settings.json"
+            exact_text = "a" * 50
+            settings = {"history": [exact_text]}
+            with patch.object(voice_input, 'SETTINGS_PATH', fake_path):
+                save_settings(settings)
+            data = json.loads(fake_path.read_text())
+            self.assertEqual(data["history"][0], "a" * 50)
+
+
 # ── State machine transition tests ───────────────────────────────
 
 

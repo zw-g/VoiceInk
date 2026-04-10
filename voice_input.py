@@ -232,7 +232,18 @@ def load_settings():
 
 
 def save_settings(settings):
-    """Save user settings to disk (atomic write)."""
+    """Save user settings to disk (atomic write).
+
+    History entries are truncated to 50 chars on disk for privacy (#122).
+    Full transcription text is only kept in memory during the session.
+    """
+    # Truncate history entries before writing to disk (privacy, issue #122)
+    if "history" in settings:
+        settings = dict(settings)  # shallow copy to avoid mutating caller's dict
+        settings["history"] = [
+            (t[:50] + "\u2026") if len(t) > 50 else t
+            for t in settings["history"]
+        ]
     try:
         import tempfile
         tmp_fd, tmp_path = tempfile.mkstemp(dir=str(SETTINGS_PATH.parent), suffix='.tmp')
