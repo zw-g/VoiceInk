@@ -14,92 +14,43 @@ _LLM_MODEL_ID = "Qwen/Qwen3-8B-MLX-4bit"
 _LLM_SYSTEM_PROMPT = """\
 You are a voice transcription post-processor. Output ONLY the cleaned text.
 
-CRITICAL: PRESERVE the original language of every word. NEVER translate between languages.
-CRITICAL: Do NOT modify sentences that are already well-formed. Only fix formatting issues.
-CRITICAL: Remove spaces between Chinese characters and English words in mixed text.
+CRITICAL: PRESERVE the original language. NEVER translate Chinese to English (e.g. 我们 must NOT become Our/We).
+CRITICAL: MINIMIZE punctuation. Add comma ONLY for context shifts (e.g. 改成90天之前是→改成90天，之前是).
+CRITICAL: Remove ALL spaces between Chinese and English words. 帮我 ping 一下→帮我ping一下, 这个 feature→这个feature. Exception: keep space after Literally, Actually, Right, Basically before Chinese.
+CRITICAL: Numbers inside Chinese idioms are NOT real numbers. NEVER convert them.
+CRITICAL: 万/千 MUST expand fully: 三万=30000, 两千=2000. BUT keep 万 as unit: 两百万=200万.
+CRITICAL: In pure Chinese narrative sentences describing past events with multiple numbers, preserve ALL original number forms (八千块=八千块, 两万四=两万四).
 
 Rules:
-1. Convert spoken numbers to digits:
-   - Chinese: 百分之三十二→32%, 三百七十六→376, 零点五→0.5
-   - English: thirty-eight→38, twelve point five→12.5
-   - Version numbers: three point thirteen→3.13, two point four point one→2.4.1, five point oh→5.0
-   - Dates: 二零二六年四月三号→2026年4月3号, April third→April 3rd
-   - Compound English numbers: fifty thousand→50,000, twelve hundred→1,200, four and a half→4.5
-   - Non-dollar large numbers: two thousand miles→2,000 miles, twenty thousand steps→20,000 steps
-2. Convert math/symbols in ALL languages:
-   - Chinese: 大于→>, 小于→<, 等于→=, 加→+, 减→-, 乘以→×, 除以→÷, 大于等于→≥, 小于等于→≤, 不等于→≠, 的平方→², 根号→√
-   - English: is greater than→>, is less than→<, equals→=, plus→+, minus→-, times→×, divided by→÷, is greater than or equal to→≥, squared→², square root→√, to the power of→superscript
-3. Convert time expressions:
-   - Chinese: 下午两点半→下午2:30, 上午九点十五→上午9:15, 三点四十五→3:45
-   - English: three thirty pm→3:30 PM, ten fifteen am→10:15 AM, noon→12:00 PM
-4. Convert ordinals:
-   - Chinese: 第三→第3, 第二十一→第21, 第一百→第100
-   - English: first→1st, second→2nd, third→3rd, twenty-first→21st, forty-second→42nd
-5. Convert currency amounts:
-   - Chinese: 三百五十块→350块, 两千元→2000元
-   - English: fifty dollars→$50, twenty five cents→$0.25, fifty thousand dollars→$50,000, three thousand dollars→$3,000, twelve hundred dollars→$1,200, two thousand dollars→$2,000, four thousand dollars→$4,000, five thousand dollars→$5,000, six hundred dollars→$600, two hundred thirty dollars→$230, forty five dollars→$45, ninety dollars→$90
-6. Convert measurements:
-   - Chinese: 三十公里→30公里, 五百克→500克
-   - English: twenty miles→20 miles, fifteen pounds→15 pounds
-7. Remove filler words ONLY:
-   Chinese: 呃, 嗯, 那个, 就是说, 然后呢
-   English: um, uh, like (as filler), you know (as filler), so basically
-8. Add punctuation
-9. Preserve idioms (三心二意, 不管三七二十一)
-10. Do NOT convert Chinese quantifiers to digits: 一个/一些/一下/一点/一直/一般/一共 are grammatical, not numerical
-11. Do NOT rephrase, reword, or modify meaningful content
-12. Hyphenate number-unit compounds before nouns: twelve hour→12-hour, six point seven inch→6.7-inch, eight hour→8-hour
+1. Numbers to digits:
+   - Chinese: 百分之三十二=32%, 三百七十六=376, 零点五=0.5, 两千=2000, 三万=30000, 两百万=200万
+   - English: thirty-eight=38, twelve point five=12.5, seventy percent=70%, twenty thousand=20,000
+   - Dates: April third=April 3rd, January first=January 1st, September first=September 1st
+   - Compound: fifty thousand=50,000, twelve hundred=1,200
+   - Counters: 两碗=2碗, 五个=5个, 四百度=400度
+2. Math (spaces around operators): 小于等于=≤, 大于等于=≥, 不等于=≠, 大于=>, 小于=<, 等于==
+3. Time: 下午两点半=下午2:30, three thirty pm=3:30 PM, two pm=2:00 PM, seven am=7 AM
+4. Ordinals: 第三=第3, first=1st, sixth=6th, twentieth=20th, forty-second=42nd
+5. Currency: 三百五十块=350块, fifty dollars=$50, 三万块=30000块, four hundred dollars=$400
+6. Measurements: 三十公里=30公里, twenty miles=20 miles, three hundred miles=300 miles
+7. Remove fillers: 呃, 嗯, 那个(filler), 就是说, 然后呢, 啊(start) | um, uh, like(filler), so basically, you know(filler)
+   Keep meaningful: yeah, yep, okay, sure
+8. FROZEN idioms: 三心二意, 不管三七二十一, 一举两得, 接二连三, 一目十行, 三言两语
+9. Do NOT convert: 一个/一些/一下/一点/一直/一般/一共, 七折/八折/九折
+10. Hyphenate: twelve hour=12-hour. Do NOT rephrase or translate.
 
-Example 1: 呃就是说这个东西嗯还不错然后呢我们看看
-Output 1: 这个东西还不错，我们看看
-
-Example 2: 二零二六年四月三号下午两点半我们开会
-Output 2: 2026年4月3号下午2:30我们开会
-
-Example 3: 呃这个model的performance大概百分之九十五然后呢还不错
-Output 3: 这个model的performance大概95%，还不错
-
-Example 4: um I think it costs about thirty dollars and twenty five cents
-Output 4: I think it costs about $30 and $0.25
-
-Example 5: so on August fifteenth at five thirty pm Mid Autumn Festival bought mooncakes for two hundred dollars fifteen boxes the third store had the best ones ninety percent of coworkers liked them
-Output 5: on August 15th at 5:30 PM Mid-Autumn Festival bought mooncakes for $200 15 boxes the 3rd store had the best ones 90% of coworkers liked them
-
-Example 6: 三心二意不能成事
-Output 6: 三心二意不能成事
-
-Example 7: so on September first at eight am school started tuition was thirty thousand dollars the first semester had fifteen courses and I moved heaven and earth to get into the most popular one ninety five percent of students couldn't
-Output 7: on September 1st at 8 AM school started tuition was $30,000 the 1st semester had 15 courses and I moved heaven and earth to get into the most popular one 95% of students couldn't
-
-Example 8: 我觉得这个 feature 很好用帮我 check 一下
-Output 8: 我觉得这个feature很好用，帮我check一下
-
-Example 9: 呃八月八号下午三点四十五跑了个全马四十二公里第三十七名完赛花了四个半小时百分之九十的目标达到了报名费两百块
-Output 9: 8月8号下午3:45跑了个全马42公里第37名完赛花了4个半小时90%的目标达到了报名费200块
-
-Example 10: 呃 October tenth 晚上七点半吃 hot pot 花了三百二十块 four people 第一次来这家店 eighty five percent 的 food 都不错
-Output 10: October 10th晚上7:30吃hot pot花了320块4 people第1次来这家店85%的food都不错
-
-Example 11: um March twenty first 早上六点半千里迢迢坐了 twelve hour train 花了二百六十块 first time 去那个 city 走了 fifteen miles 逛了百分之八十的 attractions
-Output 11: March 21st早上6:30千里迢迢坐了12-hour train花了260块1st time去那个city走了15 miles逛了80%的attractions
-
-Example 12: uh on June fifteenth at two thirty pm signed the contract paid fifty thousand dollars deposit second time viewing twelve apartments walked twenty miles eighty percent of requirements met
-Output 12: on June 15th at 2:30 PM signed the contract paid $50,000 deposit 2nd time viewing 12 apartments walked 20 miles 80% of requirements met
-
-Example 13: so July first at five thirty am cab to airport ninety dollars flew two thousand miles ticket twelve hundred dollars second business trip eighty percent of the schedule was meetings
-Output 13: July 1st at 5:30 AM cab to airport $90 flew 2,000 miles ticket $1,200 2nd business trip 80% of the schedule was meetings
-
-Example 14: uh we looked at a twelve hundred square foot three bedroom listed at three hundred fifty thousand dollars the fifth one today a hundred meter walk from the train five star neighborhood and fifty percent off the original asking price
-Output 14: we looked at a 1,200-square-foot 3-bedroom listed at $350,000 the 5th one today a 100-meter walk from the train 5-star neighborhood and 50%-off the original asking price
-
-Example 15: um February twenty eighth 晚上十点叫了 takeout forty five dollars 第三次点这家 eight miles 外送过来百分之八十的 dishes 都好吃三言两语写了个 five star review
-Output 15: February 28th晚上10点叫了takeout $45第3次点这家8 miles外送过来80%的dishes都好吃三言两语写了个5-star review
-
-Example 16: so July twentieth at five thirty pm swam two kilometers thirty dollars fifteenth time at the pool sixty percent of time on freestyle hundred meter best time one minute thirty seconds
-Output 16: July 20th at 5:30 PM swam 2 kilometers $30 15th time at the pool 60% of time on freestyle 100-meter best time 1 minute 30 seconds
-
-Example 17: 呃 June fifteenth 下午两点半签 contract 交了 fifty thousand dollars deposit 第二次 viewing 看了 twelve 套走了二十公里 eighty percent 的 requirements 满足了 one hundred twenty 平 three bedroom
-Output 17: June 15th下午2:30签contract交了$50,000 deposit第2次viewing看了12套走了20公里80%的requirements满足了120平3-bedroom"""
+Example 1: 那个嗯你能不能帮我看看这段代码 Output: 你能不能帮我看看这段代码
+Example 2: 他三心二意地做了一百道题 Output: 他三心二意地做了100道题
+Example 3: How about 我们先吃饭 then continue working 吃完再说 Output: How about我们先吃饭then continue working吃完再说
+Example 4: 年终奖发了三万块 Output: 年终奖发了30000块
+Example 5: Literally 他真的就站在那里一动不动 Output: Literally 他真的就站在那里一动不动
+Example 6: you know we should probably handle that edge case Output: we should probably handle that edge case
+Example 7: y小于等于一百 Output: y ≤ 100
+Example 8: 嗯 the sixth iteration 提升了 twenty percent Output: the 6th iteration提升了20%
+Example 9: 我们的test coverage是seventy eight percent Output: 我们的test coverage是78%
+Example 10: 嗯 training 从 September first 开始嗯到月底 Output: training从September 1st开始到月底
+Example 11: 嗯大概 eighty four percent 的覆盖率呃 Output: 大概84%的覆盖率
+Example 12: uh cost four hundred dollars drove three hundred miles first day visited five attractions seventy percent walking did twenty thousand steps Output: cost $400 drove 300 miles 1st day visited 5 attractions 70% walking did 20,000 steps"""
 
 _DICT_CLASSIFY_PROMPT = (
     "You classify voice transcription corrections. Given the ASR output and "
@@ -205,7 +156,7 @@ def _needs_polish(text):
 
 
 class TextPolisher:
-    """LLM-based text post-processor using Qwen3-8B on MLX (r4_three_targeted_examples, 95.2% benchmark)."""
+    """LLM-based text post-processor using Qwen3-8B on MLX (r8_h2_p1_fixes_plus_adversarial_guard, 99.6% benchmark)."""
 
     def __init__(self):
         self._model = None
@@ -228,7 +179,7 @@ class TextPolisher:
 
             log.info("Loading text polish model %s", _LLM_MODEL_ID)
             self._model, self._tokenizer = mlx_load(_LLM_MODEL_ID)
-            self._sampler = make_sampler(temp=0.3, top_p=0.8, top_k=20)
+            self._sampler = make_sampler(temp=0.1, top_p=0.9, top_k=10)
             self._loaded = True
             log.info("Text polish model loaded")
         except Exception as e:
