@@ -142,33 +142,83 @@ cat > "$PLIST" << PLISTEOF
 </plist>
 PLISTEOF
 
-# Copy .app to /Applications if it exists (only present if built with py2app)
-if [[ -d "$SCRIPT_DIR/VoiceInk.app" ]]; then
-    echo "Installing VoiceInk.app..."
-    sudo rm -rf /Applications/VoiceInk.app 2>/dev/null || true
-    sudo cp -R "$SCRIPT_DIR/VoiceInk.app" /Applications/ 2>/dev/null || echo "  Skipped (no sudo)."
-elif [[ -d "$INSTALL_DIR/VoiceInk.app" ]]; then
-    echo "Installing VoiceInk.app..."
-    sudo rm -rf /Applications/VoiceInk.app 2>/dev/null || true
-    sudo cp -R "$INSTALL_DIR/VoiceInk.app" /Applications/ 2>/dev/null || echo "  Skipped (no sudo)."
+# Build lightweight .app wrapper (no py2app needed)
+echo "Creating VoiceInk.app..."
+APP_DIR="$INSTALL_DIR/VoiceInk.app"
+rm -rf "$APP_DIR"
+mkdir -p "$APP_DIR/Contents/MacOS"
+mkdir -p "$APP_DIR/Contents/Resources"
+
+# Launcher script
+cat > "$APP_DIR/Contents/MacOS/VoiceInk" << 'LAUNCHEREOF'
+#!/bin/bash
+INSTALL_DIR="$HOME/.local/voice-input"
+VENV="$INSTALL_DIR/.venv-py2app"
+export PATH="/opt/homebrew/bin:/usr/local/bin:$PATH"
+exec "$VENV/bin/python" "$INSTALL_DIR/voice_input.py"
+LAUNCHEREOF
+chmod +x "$APP_DIR/Contents/MacOS/VoiceInk"
+
+# Info.plist
+cat > "$APP_DIR/Contents/Info.plist" << PLISTEOF
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>CFBundleName</key>
+    <string>VoiceInk</string>
+    <key>CFBundleDisplayName</key>
+    <string>VoiceInk</string>
+    <key>CFBundleIdentifier</key>
+    <string>com.local.voiceink</string>
+    <key>CFBundleVersion</key>
+    <string>1.0.0</string>
+    <key>CFBundleShortVersionString</key>
+    <string>1.0.0</string>
+    <key>CFBundleExecutable</key>
+    <string>VoiceInk</string>
+    <key>CFBundleIconFile</key>
+    <string>VoiceInk</string>
+    <key>CFBundlePackageType</key>
+    <string>APPL</string>
+    <key>LSUIElement</key>
+    <true/>
+    <key>NSMicrophoneUsageDescription</key>
+    <string>VoiceInk needs microphone access for voice-to-text transcription.</string>
+    <key>NSAppleEventsUsageDescription</key>
+    <string>VoiceInk needs accessibility access for keyboard shortcuts and text insertion.</string>
+</dict>
+</plist>
+PLISTEOF
+
+# Copy icon
+if [[ -f "$INSTALL_DIR/VoiceInk.icns" ]]; then
+    cp "$INSTALL_DIR/VoiceInk.icns" "$APP_DIR/Contents/Resources/VoiceInk.icns"
 fi
+
+# Install to /Applications
+sudo rm -rf /Applications/VoiceInk.app 2>/dev/null || true
+sudo cp -R "$APP_DIR" /Applications/ 2>/dev/null || echo "  Could not copy to /Applications (no sudo). You can drag VoiceInk.app from $APP_DIR manually."
+echo "VoiceInk.app installed to /Applications/"
 
 echo ""
 echo "=== Installation Complete ==="
 echo ""
 echo "Start VoiceInk:"
-echo "  ~/.local/voice-input/start.sh"
+echo "  Option 1: Open VoiceInk from /Applications/ (recommended)"
+echo "  Option 2: ~/.local/voice-input/start.sh"
 echo ""
 echo "To start automatically on login:"
 echo "  launchctl load ~/Library/LaunchAgents/com.local.voiceinput.plist"
 echo ""
-echo "IMPORTANT: Grant these permissions in System Settings > Privacy & Security:"
-echo "  1. Accessibility — add Terminal (or your terminal app) for keyboard shortcuts"
-echo "  2. Microphone — add Terminal (or your terminal app) for voice recording"
-echo "     Note: The permission prompt should appear on first launch."
-echo "     If it doesn't, go to System Settings > Privacy & Security > Microphone"
-echo "     and add your terminal app manually."
-echo "  3. Screen Recording — add Terminal (optional, for context-aware transcription)"
+echo "IMPORTANT: On first launch, macOS will ask for permissions."
+echo "  Grant ALL of these in System Settings > Privacy & Security:"
+echo "  1. Accessibility — for keyboard shortcut detection + text insertion"
+echo "  2. Microphone — for voice recording"
+echo "  3. Screen Recording — for context-aware transcription (optional)"
+echo ""
+echo "  If launching from /Applications/, grant permissions to 'VoiceInk'."
+echo "  If launching from terminal, grant permissions to your terminal app."
 echo ""
 echo "Controls: Hold right Option to talk, release to type."
 echo "          Double-tap right Option for toggle (hands-free) mode."
