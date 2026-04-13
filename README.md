@@ -44,12 +44,18 @@
 ```bash
 git clone https://github.com/zw-g/VoiceInk.git
 cd VoiceInk
+chmod +x install.sh
 ./install.sh
 ```
 
 ### Option 2: Download ZIP (no git required)
 1. Download from https://github.com/zw-g/VoiceInk/archive/refs/heads/main.zip
-2. Unzip and run `./install.sh`
+2. Unzip, then:
+```bash
+cd VoiceInk-main
+chmod +x install.sh
+./install.sh
+```
 
 Both methods work identically. Git-clone installs get faster updates via `git pull`; ZIP installs update via tarball download. VoiceInk auto-detects which method to use.
 
