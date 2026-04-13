@@ -142,17 +142,14 @@ cat > "$PLIST" << PLISTEOF
 </plist>
 PLISTEOF
 
-# Copy .app to /Applications (optional — may need sudo)
-echo "Installing VoiceInk.app..."
+# Copy .app to /Applications if it exists (only present if built with py2app)
 if [[ -d "$SCRIPT_DIR/VoiceInk.app" ]]; then
-    if [[ -d /Applications/VoiceInk.app && ! -L /Applications/VoiceInk.app ]]; then
-        sudo rm -rf /Applications/VoiceInk.app 2>/dev/null || true
-    fi
-    sudo cp -R "$SCRIPT_DIR/VoiceInk.app" /Applications/ 2>/dev/null || echo "  Skipped (no sudo). You can manually copy VoiceInk.app to /Applications/."
+    echo "Installing VoiceInk.app..."
+    sudo rm -rf /Applications/VoiceInk.app 2>/dev/null || true
+    sudo cp -R "$SCRIPT_DIR/VoiceInk.app" /Applications/ 2>/dev/null || echo "  Skipped (no sudo)."
 elif [[ -d "$INSTALL_DIR/VoiceInk.app" ]]; then
-    if [[ -d /Applications/VoiceInk.app && ! -L /Applications/VoiceInk.app ]]; then
-        sudo rm -rf /Applications/VoiceInk.app 2>/dev/null || true
-    fi
+    echo "Installing VoiceInk.app..."
+    sudo rm -rf /Applications/VoiceInk.app 2>/dev/null || true
     sudo cp -R "$INSTALL_DIR/VoiceInk.app" /Applications/ 2>/dev/null || echo "  Skipped (no sudo)."
 fi
 
@@ -160,14 +157,18 @@ echo ""
 echo "=== Installation Complete ==="
 echo ""
 echo "Start VoiceInk:"
-echo "  Option 1: Click VoiceInk in /Applications/"
-echo "  Option 2: ~/.local/voice-input/start.sh"
+echo "  ~/.local/voice-input/start.sh"
 echo ""
-echo "First launch will download the ASR model (~3.4 GB)."
-echo "You will need to grant these permissions in System Settings > Privacy & Security:"
-echo "  1. Accessibility — for keyboard shortcut detection + text pasting"
-echo "  2. Microphone — for voice recording"
-echo "  3. Screen Recording — for context-aware transcription (optional)"
+echo "To start automatically on login:"
+echo "  launchctl load ~/Library/LaunchAgents/com.local.voiceinput.plist"
+echo ""
+echo "IMPORTANT: Grant these permissions in System Settings > Privacy & Security:"
+echo "  1. Accessibility — add Terminal (or your terminal app) for keyboard shortcuts"
+echo "  2. Microphone — add Terminal (or your terminal app) for voice recording"
+echo "     Note: The permission prompt should appear on first launch."
+echo "     If it doesn't, go to System Settings > Privacy & Security > Microphone"
+echo "     and add your terminal app manually."
+echo "  3. Screen Recording — add Terminal (optional, for context-aware transcription)"
 echo ""
 echo "Controls: Hold right Option to talk, release to type."
 echo "          Double-tap right Option for toggle (hands-free) mode."
